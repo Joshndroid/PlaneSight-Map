@@ -163,6 +163,9 @@ class PlaneSightMapCard extends HTMLElement {
     this._recvMarker   = null;
     this._rangeRings   = [];
     this._pollTimer    = null;
+    this._bootPromise  = null;
+    this._resizeObserver = null;
+    this._lastAircraft = [];
     this._receiverLat  = null;
     this._receiverLon  = null;
     this._receiverIsHomeFallback = false;
@@ -170,6 +173,8 @@ class PlaneSightMapCard extends HTMLElement {
     this._mapReady     = false;
     this._homeDefaultApplied = false;
     this._leafletCssInjected = false;
+    this._visibilityHandler = () => this._recoverMap();
+    this._windowResizeHandler = () => this._recoverMap();
   }
 
   _isValidCoordinate(lat, lon) {
@@ -216,16 +221,28 @@ class PlaneSightMapCard extends HTMLElement {
     if (!config.url && !config.entity) {
       throw new Error("PlaneSight map card: provide either `url` or `entity`");
     }
+    this._destroyMap();
     this._config = { ...config };
     this._homeDefaultApplied = false;
     this._render();
     this._boot();
   }
 
+  connectedCallback() {
+    window.addEventListener("resize", this._windowResizeHandler);
+    document.addEventListener("visibilitychange", this._visibilityHandler);
+
+    if (this._config.url || this._config.entity) {
+      this._boot();
+    }
+    this._recoverMap();
+  }
+
   set hass(hass) {
     this._hass = hass;
     if (this._mapReady) {
       this._setHomeDefaultView();
+      this._recoverMap();
     }
     if (this._config.entity && this._mapReady) {
       const state = hass.states[this._config.entity];
@@ -255,6 +272,16 @@ class PlaneSightMapCard extends HTMLElement {
   }
 
   disconnectedCallback() {
+    window.removeEventListener("resize", this._windowResizeHandler);
+    document.removeEventListener("visibilitychange", this._visibilityHandler);
+    this._destroyMap();
+  }
+
+  _destroyMap() {
+    if (this._resizeObserver) {
+      this._resizeObserver.disconnect();
+      this._resizeObserver = null;
+    }
     if (this._pollTimer) {
       clearInterval(this._pollTimer);
       this._pollTimer = null;
@@ -264,6 +291,10 @@ class PlaneSightMapCard extends HTMLElement {
       this._map = null;
       this._mapReady = false;
     }
+    this._bootPromise = null;
+    this._recvMarker = null;
+    this._rangeRings = [];
+    this._markers.clear();
   }
 
   // ------------------------------------------------------------------
@@ -271,15 +302,44 @@ class PlaneSightMapCard extends HTMLElement {
   // ------------------------------------------------------------------
 
   async _boot() {
+    if (this._bootPromise) return this._bootPromise;
+    if (!this.isConnected) return null;
+
+    this._bootPromise = this._doBoot();
+    try {
+      return await this._bootPromise;
+    } finally {
+      this._bootPromise = null;
+    }
+  }
+
+  async _doBoot() {
     try {
       await loadLeaflet();
       await this._injectLeafletCssToShadow();
       this._initMap();
+      if (!this._map) {
+        throw new Error("Map container was not available");
+      }
       this._mapReady = true;
-      this._setHomeDefaultView();
+      this._hideError();
+      this._watchMapSize();
+      if (this._isValidCoordinate(this._receiverLat, this._receiverLon)) {
+        this._map.setView(
+          [this._receiverLat, this._receiverLon],
+          this._config.default_zoom || 8
+        );
+        this._placeReceiverMarker();
+        this._addRangeRings();
+      } else {
+        this._setHomeDefaultView();
+      }
       if (this._config.url) {
         this._startPolling();
+      } else if (this._lastAircraft.length > 0) {
+        this._updatePlanes(this._lastAircraft);
       }
+      this._recoverMap();
     } catch (err) {
       console.error("PlaneSight map: failed to load Leaflet", err);
       this._showError("Could not load map library. Check internet connectivity.");
@@ -307,6 +367,10 @@ class PlaneSightMapCard extends HTMLElement {
   _initMap() {
     const container = this.shadowRoot.getElementById("ps-map");
     if (!container || !window.L) return;
+    if (this._map) {
+      this._recoverMap();
+      return;
+    }
 
     const showControls = this._config.show_controls === true;
     const dark         = this._config.dark_tiles !== false; // default dark
@@ -330,6 +394,33 @@ class PlaneSightMapCard extends HTMLElement {
     // Default view — will be re-centred to HA home, then receiver when known.
     this._map.setView([0, 0], 5);
     this._setHomeDefaultView();
+  }
+
+  _watchMapSize() {
+    const container = this.shadowRoot.getElementById("ps-map");
+    if (typeof ResizeObserver === "undefined") return;
+    if (!container || this._resizeObserver) return;
+
+    this._resizeObserver = new ResizeObserver(() => this._recoverMap());
+    this._resizeObserver.observe(container);
+  }
+
+  _recoverMap() {
+    if (!this.isConnected) return;
+    if (!this._mapReady || !this._map || !window.L) {
+      if (this._config.url || this._config.entity) this._boot();
+      return;
+    }
+
+    requestAnimationFrame(() => {
+      if (!this.isConnected || !this._map) return;
+      this._map.invalidateSize({ animate: false, pan: false });
+      this._placeReceiverMarker();
+      this._addRangeRings();
+      if (this._lastAircraft.length > 0) {
+        this._updatePlanes(this._lastAircraft);
+      }
+    });
   }
 
   // ------------------------------------------------------------------
@@ -385,7 +476,7 @@ class PlaneSightMapCard extends HTMLElement {
 
       // Simple label using a div-icon tooltip near the ring top
       const labelLat = this._receiverLat + (nm / 60); // rough degree offset
-      window.L.marker([labelLat, this._receiverLon], {
+      const label = window.L.marker([labelLat, this._receiverLon], {
         icon: window.L.divIcon({
           html: `<span class="ring-label">${nm}nm</span>`,
           className: "",
@@ -397,6 +488,7 @@ class PlaneSightMapCard extends HTMLElement {
       }).addTo(this._map);
 
       this._rangeRings.push(ring);
+      this._rangeRings.push(label);
     });
   }
 
@@ -447,6 +539,7 @@ class PlaneSightMapCard extends HTMLElement {
   // ------------------------------------------------------------------
 
   _startPolling() {
+    if (this._pollTimer) return;
     const intervalMs = (this._config.poll_interval || 5) * 1000;
     const poll = () => this._fetchAndUpdate();
     poll();
@@ -492,9 +585,11 @@ class PlaneSightMapCard extends HTMLElement {
         ))
         .map((a) => this._enrichAircraft(a));
 
+      this._hideError();
       this._updatePlanes(visible);
     } catch (err) {
       console.warn("PlaneSight map: fetch error", err);
+      this._showError("Could not refresh aircraft data.");
     }
   }
 
@@ -504,6 +599,7 @@ class PlaneSightMapCard extends HTMLElement {
 
   _updatePlanes(aircraft) {
     if (!this._map || !window.L) return;
+    this._lastAircraft = aircraft;
 
     const activeHexes = new Set(aircraft.map((a, idx) => aircraftKey(a, idx)));
 
@@ -608,6 +704,14 @@ class PlaneSightMapCard extends HTMLElement {
     }
   }
 
+  _hideError() {
+    const el = this.shadowRoot.getElementById("ps-error");
+    if (el) {
+      el.style.display = "none";
+      el.textContent = "";
+    }
+  }
+
   _css(height) {
     return `
       :host { display: block; }
@@ -632,17 +736,23 @@ class PlaneSightMapCard extends HTMLElement {
       /* ── Error overlay ──────────────────────────────────────────────── */
       #ps-error {
         position: absolute;
-        inset: 0;
+        top: 10px;
+        right: 10px;
+        max-width: min(280px, calc(100% - 20px));
         display: flex;
         align-items: center;
         justify-content: center;
-        background: rgba(10,12,18,0.85);
-        color: #ef4444;
+        background: rgba(10,14,22,0.88);
+        border: 1px solid rgba(239,68,68,0.45);
+        border-radius: 6px;
+        color: #fca5a5;
         font-family: monospace;
         font-size: 0.85em;
-        padding: 20px;
-        text-align: center;
+        padding: 8px 10px;
+        text-align: left;
         z-index: 9999;
+        pointer-events: none;
+        box-shadow: 0 4px 18px rgba(0,0,0,0.45);
       }
 
       /* ── Receiver dot (pulsing) ─────────────────────────────────────── */
