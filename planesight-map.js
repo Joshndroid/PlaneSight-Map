@@ -433,8 +433,8 @@ class PlaneSightMapCard extends HTMLElement {
     const icon = window.L.divIcon({
       html: `<div class="recv-dot"></div>`,
       className: "",
-      iconSize:   [16, 16],
-      iconAnchor: [8, 8],
+      iconSize:   [6, 6],
+      iconAnchor: [3, 3],
     });
 
     if (this._recvMarker) {
@@ -757,18 +757,18 @@ class PlaneSightMapCard extends HTMLElement {
 
       /* ── Receiver dot (pulsing) ─────────────────────────────────────── */
       .recv-dot {
-        width: 9px;
-        height: 9px;
+        width: 4px;
+        height: 4px;
         border-radius: 50%;
-        background: rgba(34,197,94,0.58);
-        border: 1px solid rgba(134,239,172,0.78);
-        box-shadow: 0 0 4px rgba(34,197,94,0.45);
-        animation: recvPulse 3.2s ease-in-out infinite;
+        background: rgba(134,239,172,0.42);
+        border: 1px solid rgba(134,239,172,0.34);
+        box-shadow: 0 0 2px rgba(34,197,94,0.25);
+        animation: recvPulse 4s ease-in-out infinite;
       }
 
       @keyframes recvPulse {
-        0%,100% { transform: scale(1);    opacity: 0.72; box-shadow: 0 0 4px rgba(34,197,94,0.45); }
-        50%      { transform: scale(1.22); opacity: 0.48; box-shadow: 0 0 9px rgba(34,197,94,0.5); }
+        0%,100% { transform: scale(1);    opacity: 0.48; box-shadow: 0 0 2px rgba(34,197,94,0.22); }
+        50%      { transform: scale(1.12); opacity: 0.28; box-shadow: 0 0 4px rgba(34,197,94,0.24); }
       }
 
       /* ── Plane marker wrapper ───────────────────────────────────────── */
