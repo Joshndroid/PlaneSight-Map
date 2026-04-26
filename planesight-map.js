@@ -757,18 +757,18 @@ class PlaneSightMapCard extends HTMLElement {
 
       /* ── Receiver dot (pulsing) ─────────────────────────────────────── */
       .recv-dot {
-        width: 14px;
-        height: 14px;
+        width: 9px;
+        height: 9px;
         border-radius: 50%;
-        background: rgba(34,197,94,0.85);
-        border: 2px solid #22c55e;
-        box-shadow: 0 0 10px #22c55e;
-        animation: recvPulse 2.4s ease-in-out infinite;
+        background: rgba(34,197,94,0.58);
+        border: 1px solid rgba(134,239,172,0.78);
+        box-shadow: 0 0 4px rgba(34,197,94,0.45);
+        animation: recvPulse 3.2s ease-in-out infinite;
       }
 
       @keyframes recvPulse {
-        0%,100% { transform: scale(1);   opacity: 1; box-shadow: 0 0 8px #22c55e; }
-        50%      { transform: scale(1.4); opacity: 0.75; box-shadow: 0 0 20px #22c55e, 0 0 40px rgba(34,197,94,0.3); }
+        0%,100% { transform: scale(1);    opacity: 0.72; box-shadow: 0 0 4px rgba(34,197,94,0.45); }
+        50%      { transform: scale(1.22); opacity: 0.48; box-shadow: 0 0 9px rgba(34,197,94,0.5); }
       }
 
       /* ── Plane marker wrapper ───────────────────────────────────────── */
