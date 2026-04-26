@@ -155,7 +155,35 @@ class PlaneSightMapCard extends HTMLElement {
     this._receiverLon  = null;
     this._recvFetched  = false;
     this._mapReady     = false;
+    this._homeDefaultApplied = false;
     this._leafletCssInjected = false;
+  }
+
+  _isValidCoordinate(lat, lon) {
+    return (
+      Number.isFinite(lat) &&
+      Number.isFinite(lon) &&
+      lat >= -90 &&
+      lat <= 90 &&
+      lon >= -180 &&
+      lon <= 180
+    );
+  }
+
+  _homeLocation() {
+    const lat = Number(this._hass?.config?.latitude);
+    const lon = Number(this._hass?.config?.longitude);
+    return this._isValidCoordinate(lat, lon) ? { lat, lon } : null;
+  }
+
+  _setHomeDefaultView() {
+    if (!this._map || this._receiverLat != null || this._homeDefaultApplied) return;
+
+    const home = this._homeLocation();
+    if (home) {
+      this._map.setView([home.lat, home.lon], this._config.default_zoom || 8);
+      this._homeDefaultApplied = true;
+    }
   }
 
   // ------------------------------------------------------------------
@@ -176,24 +204,28 @@ class PlaneSightMapCard extends HTMLElement {
       throw new Error("PlaneSight map card: provide either `url` or `entity`");
     }
     this._config = { ...config };
+    this._homeDefaultApplied = false;
     this._render();
     this._boot();
   }
 
   set hass(hass) {
     this._hass = hass;
+    if (this._mapReady) {
+      this._setHomeDefaultView();
+    }
     if (this._config.entity && this._mapReady) {
       const state = hass.states[this._config.entity];
       if (state) {
         const aircraft = state.attributes.aircraft || [];
-        const rLat = state.attributes.receiver_lat;
-        const rLon = state.attributes.receiver_lon;
-        if (rLat != null && this._receiverLat == null) {
+        const rLat = Number(state.attributes.receiver_lat);
+        const rLon = Number(state.attributes.receiver_lon);
+        if (this._isValidCoordinate(rLat, rLon) && this._receiverLat == null) {
           this._receiverLat = rLat;
           this._receiverLon = rLon;
           this._placeReceiverMarker();
           this._addRangeRings();
-          this._map.setView([rLat, rLon], 8);
+          this._map.setView([rLat, rLon], this._config.default_zoom || 8);
         }
         this._updatePlanes(aircraft);
       }
@@ -226,6 +258,7 @@ class PlaneSightMapCard extends HTMLElement {
       await this._injectLeafletCssToShadow();
       this._initMap();
       this._mapReady = true;
+      this._setHomeDefaultView();
       if (this._config.url) {
         this._startPolling();
       }
@@ -276,8 +309,9 @@ class PlaneSightMapCard extends HTMLElement {
       crossOrigin: true,
     }).addTo(this._map);
 
-    // Default view — will be re-centred after receiver position is known
+    // Default view — will be re-centred to HA home, then receiver when known.
     this._map.setView([0, 0], 5);
+    this._setHomeDefaultView();
   }
 
   // ------------------------------------------------------------------
@@ -374,10 +408,12 @@ class PlaneSightMapCard extends HTMLElement {
           const r = await fetch(`${base}/data/receiver.json`);
           if (r.ok) {
             const recv = await r.json();
-            if (recv.lat != null) {
-              this._receiverLat = recv.lat;
-              this._receiverLon = recv.lon;
-              this._map.setView([recv.lat, recv.lon], 8);
+            const rLat = Number(recv.lat);
+            const rLon = Number(recv.lon);
+            if (this._isValidCoordinate(rLat, rLon)) {
+              this._receiverLat = rLat;
+              this._receiverLon = rLon;
+              this._map.setView([rLat, rLon], this._config.default_zoom || 8);
               this._placeReceiverMarker();
               this._addRangeRings();
             }
