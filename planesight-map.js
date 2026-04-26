@@ -67,6 +67,7 @@ async function loadLeaflet() {
 // ---------------------------------------------------------------------------
 
 const R_NM = 3440.065;
+const DISTANCE_FIELDS = ["distance_nm", "distance", "dist", "dst", "r_dst"];
 
 function haversineNm(lat1, lon1, lat2, lon2) {
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -77,6 +78,24 @@ function haversineNm(lat1, lon1, lat2, lon2) {
       Math.cos((lat2 * Math.PI) / 180) *
       Math.sin(dLon / 2) ** 2;
   return R_NM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function positionAgeSeconds(ac) {
+  const age = Number(ac.seen_pos ?? ac.seen ?? 0);
+  return Number.isFinite(age) ? age : 0;
+}
+
+function existingDistanceNm(ac) {
+  for (const field of DISTANCE_FIELDS) {
+    if (ac[field] == null) continue;
+    const n = Number(ac[field]);
+    if (Number.isFinite(n)) return Math.round(n * 10) / 10;
+  }
+  return null;
+}
+
+function aircraftKey(ac, idx = 0) {
+  return ac.hex || `${ac.lat}:${ac.lon}:${ac.flight || ac.r || idx}`;
 }
 
 /**
@@ -129,13 +148,6 @@ function formatPopupSpeed(gs) {
   return gs != null ? `${Math.round(gs)} kt` : "--";
 }
 
-function formatPopupRoute(ac) {
-  if (!ac.route) return "--";
-  const parts = ac.route.split("-");
-  if (parts.length >= 2) return `${parts[0].trim()} → ${parts[parts.length - 1].trim()}`;
-  return ac.route.trim();
-}
-
 // ---------------------------------------------------------------------------
 // Web Component
 // ---------------------------------------------------------------------------
@@ -153,6 +165,7 @@ class PlaneSightMapCard extends HTMLElement {
     this._pollTimer    = null;
     this._receiverLat  = null;
     this._receiverLon  = null;
+    this._receiverIsHomeFallback = false;
     this._recvFetched  = false;
     this._mapReady     = false;
     this._homeDefaultApplied = false;
@@ -220,14 +233,19 @@ class PlaneSightMapCard extends HTMLElement {
         const aircraft = state.attributes.aircraft || [];
         const rLat = Number(state.attributes.receiver_lat);
         const rLon = Number(state.attributes.receiver_lon);
-        if (this._isValidCoordinate(rLat, rLon) && this._receiverLat == null) {
+        if (
+          this._isValidCoordinate(rLat, rLon) &&
+          (this._receiverLat == null || this._receiverIsHomeFallback)
+        ) {
           this._receiverLat = rLat;
           this._receiverLon = rLon;
+          this._receiverIsHomeFallback = false;
           this._placeReceiverMarker();
           this._addRangeRings();
           this._map.setView([rLat, rLon], this._config.default_zoom || 8);
         }
-        this._updatePlanes(aircraft);
+        this._setHomeReceiverFallback();
+        this._updatePlanes(aircraft.map((ac) => this._enrichAircraft(ac)));
       }
     }
   }
@@ -365,11 +383,6 @@ class PlaneSightMapCard extends HTMLElement {
         }
       ).addTo(this._map);
 
-      // Label at north of each ring
-      const labelLatLon = window.L.destination
-        ? window.L.destination([this._receiverLat, this._receiverLon], 0, meters / 1852)
-        : null;
-
       // Simple label using a div-icon tooltip near the ring top
       const labelLat = this._receiverLat + (nm / 60); // rough degree offset
       window.L.marker([labelLat, this._receiverLon], {
@@ -385,6 +398,48 @@ class PlaneSightMapCard extends HTMLElement {
 
       this._rangeRings.push(ring);
     });
+  }
+
+  _setHomeReceiverFallback() {
+    if (this._receiverLat != null && this._receiverLon != null) return;
+    const home = this._homeLocation();
+    if (home) {
+      this._receiverLat = home.lat;
+      this._receiverLon = home.lon;
+      this._receiverIsHomeFallback = true;
+      this._placeReceiverMarker();
+      this._addRangeRings();
+    }
+  }
+
+  _enrichAircraft(ac) {
+    const copy = { ...ac };
+    if (copy.flight) copy.flight = copy.flight.trim();
+
+    if (this._isValidCoordinate(Number(copy.lat), Number(copy.lon))) {
+      copy.lat = Number(copy.lat);
+      copy.lon = Number(copy.lon);
+    }
+
+    if (
+      this._isValidCoordinate(this._receiverLat, this._receiverLon) &&
+      this._isValidCoordinate(copy.lat, copy.lon)
+    ) {
+      copy.distance_nm =
+        Math.round(
+          haversineNm(
+            Number(this._receiverLat),
+            Number(this._receiverLon),
+            copy.lat,
+            copy.lon
+          ) * 10
+        ) / 10;
+    } else {
+      const distance = existingDistanceNm(copy);
+      if (distance != null) copy.distance_nm = distance;
+    }
+
+    return copy;
   }
 
   // ------------------------------------------------------------------
@@ -413,12 +468,14 @@ class PlaneSightMapCard extends HTMLElement {
             if (this._isValidCoordinate(rLat, rLon)) {
               this._receiverLat = rLat;
               this._receiverLon = rLon;
+              this._receiverIsHomeFallback = false;
               this._map.setView([rLat, rLon], this._config.default_zoom || 8);
               this._placeReceiverMarker();
               this._addRangeRings();
             }
           }
         } catch (_) { /* best-effort */ }
+        this._setHomeReceiverFallback();
       }
 
       const resp = await fetch(`${base}/data/aircraft.json`);
@@ -427,20 +484,13 @@ class PlaneSightMapCard extends HTMLElement {
       const data = await resp.json();
       const raw  = data.aircraft || [];
 
-      // Filter: must have position and be recent
+      // Filter: match tar1090's map behavior by using position age when available.
       const visible = raw
-        .filter((a) => "lat" in a && "lon" in a && (a.seen ?? 999) < 60)
-        .map((a) => {
-          const copy = { ...a };
-          if (copy.flight) copy.flight = copy.flight.trim();
-          if (this._receiverLat != null) {
-            copy.distance_nm =
-              Math.round(
-                haversineNm(this._receiverLat, this._receiverLon, a.lat, a.lon) * 10
-              ) / 10;
-          }
-          return copy;
-        });
+        .filter((a) => (
+          this._isValidCoordinate(Number(a.lat), Number(a.lon)) &&
+          positionAgeSeconds(a) <= 60
+        ))
+        .map((a) => this._enrichAircraft(a));
 
       this._updatePlanes(visible);
     } catch (err) {
@@ -455,7 +505,7 @@ class PlaneSightMapCard extends HTMLElement {
   _updatePlanes(aircraft) {
     if (!this._map || !window.L) return;
 
-    const activeHexes = new Set(aircraft.map((a) => a.hex));
+    const activeHexes = new Set(aircraft.map((a, idx) => aircraftKey(a, idx)));
 
     // Remove stale markers
     for (const [hex, marker] of this._markers) {
@@ -466,7 +516,8 @@ class PlaneSightMapCard extends HTMLElement {
     }
 
     // Add / update markers
-    aircraft.forEach((ac) => {
+    aircraft.forEach((ac, idx) => {
+      const key   = aircraftKey(ac, idx);
       const pos   = [ac.lat, ac.lon];
       const color = altColor(ac.alt_baro);
       const size  = 22;
@@ -478,8 +529,8 @@ class PlaneSightMapCard extends HTMLElement {
         iconAnchor: [size / 2, size / 2],
       });
 
-      if (this._markers.has(ac.hex)) {
-        const marker = this._markers.get(ac.hex);
+      if (this._markers.has(key)) {
+        const marker = this._markers.get(key);
         marker.setLatLng(pos);
         marker.setIcon(icon);
         // Update popup content without reopening it
@@ -493,7 +544,7 @@ class PlaneSightMapCard extends HTMLElement {
             className: "ps-popup",
           })
           .addTo(this._map);
-        this._markers.set(ac.hex, marker);
+        this._markers.set(key, marker);
       }
     });
 
@@ -512,7 +563,6 @@ class PlaneSightMapCard extends HTMLElement {
     const type   = ac.t || "--";
     const alt    = formatPopupAlt(ac.alt_baro);
     const speed  = formatPopupSpeed(ac.gs);
-    const route  = formatPopupRoute(ac);
     const dist   = ac.distance_nm != null ? `${ac.distance_nm} nm` : "--";
     const hdg    = ac.track != null ? `${Math.round(ac.track)}°` : "--";
     const vs     = ac.baro_rate != null
@@ -525,7 +575,6 @@ class PlaneSightMapCard extends HTMLElement {
         <div class="pop-callsign">${flight}</div>
         <div class="pop-type">${type}</div>
         <table class="pop-table">
-          <tr><td>Route</td>   <td>${route}</td></tr>
           <tr><td>Alt</td>     <td>${alt}</td></tr>
           <tr><td>V/S</td>     <td>${vs}</td></tr>
           <tr><td>Speed</td>   <td>${speed}</td></tr>
