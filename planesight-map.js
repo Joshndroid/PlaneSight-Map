@@ -194,6 +194,7 @@ class PlaneSightMapCard extends HTMLElement {
     this._receiverLon  = null;
     this._receiverIsHomeFallback = false;
     this._recvFetched  = false;
+    this._lastSensorUpdated = null;
     this._mapReady     = false;
     this._homeDefaultApplied = false;
     this._leafletCssInjected = false;
@@ -268,9 +269,15 @@ class PlaneSightMapCard extends HTMLElement {
       this._setHomeDefaultView();
       this._recoverMap();
     }
+    // Entity mode: HA calls set hass on every entity change in the system.
+    // Only process when the PlaneSight sensor itself has actually updated.
+    // We also gate on _mapReady; _lastSensorUpdated is only set when the map
+    // is ready, so the first call after boot always processes current state.
     if (this._config.entity && this._mapReady) {
       const state = hass.states[this._config.entity];
-      if (state) {
+      if (state && state.last_updated !== this._lastSensorUpdated) {
+        this._lastSensorUpdated = state.last_updated;
+
         const aircraft = state.attributes.aircraft || [];
         const rLat = Number(state.attributes.receiver_lat);
         const rLon = Number(state.attributes.receiver_lon);
@@ -319,6 +326,10 @@ class PlaneSightMapCard extends HTMLElement {
     this._recvMarker = null;
     this._rangeRings = [];
     this._markers.clear();
+    // Reset fetch flags so a new boot re-fetches receiver position and
+    // re-processes the first entity-mode state it receives.
+    this._recvFetched = false;
+    this._lastSensorUpdated = null;
   }
 
   // ------------------------------------------------------------------
@@ -476,10 +487,9 @@ class PlaneSightMapCard extends HTMLElement {
   _addRangeRings() {
     if (!this._map || this._receiverLat == null) return;
     if (this._config.range_rings === false) return;
-
-    // Remove previous rings
-    this._rangeRings.forEach((r) => r.remove());
-    this._rangeRings = [];
+    // Rings are drawn once per boot; skip if already on the map.
+    // _destroyMap() clears _rangeRings, so after a setConfig they are redrawn.
+    if (this._rangeRings.length > 0) return;
 
     const distances = this._config.range_ring_distances || [50, 100, 150, 200];
 
