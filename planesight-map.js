@@ -66,7 +66,10 @@ async function loadLeaflet() {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const R_NM = 3440.065;
+const R_NM          = 3440.065;
+const FEET_TO_METRES = 0.3048;
+const KNOTS_TO_KMH   = 1.852;
+const NM_TO_KM       = 1.852;
 const DISTANCE_FIELDS = ["distance_nm", "distance", "dist", "dst", "r_dst"];
 
 function haversineNm(lat1, lon1, lat2, lon2) {
@@ -107,13 +110,32 @@ function aircraftKey(ac, idx = 0) {
  *   20 000–30 000 ft  →  sky blue
  *   > 30 000 ft       →  violet       (cruise altitude)
  */
+/** Resolve alt_baro to feet (number), handling "ground" and "FL200" strings. */
+function altToFeet(alt) {
+  if (alt === undefined || alt === null) return null;
+  if (typeof alt === "string") {
+    const v = alt.trim().toLowerCase();
+    if (v === "ground") return 0;
+    if (v.startsWith("fl")) {
+      const fl = Number(v.slice(2));
+      return Number.isFinite(fl) ? fl * 100 : null;
+    }
+    const n = Number(alt);
+    return Number.isFinite(n) ? n : null;
+  }
+  const n = Number(alt);
+  return Number.isFinite(n) ? n : null;
+}
+
 function altColor(alt) {
-  if (alt === undefined || alt === null || typeof alt === "string") return "#9ca3af";
-  if (alt <  2_000) return "#4ade80";   // lime
-  if (alt < 10_000) return "#a3e635";   // yellow-green
-  if (alt < 20_000) return "#fbbf24";   // amber
-  if (alt < 30_000) return "#38bdf8";   // sky blue
-  return "#c084fc";                      // violet
+  const ft = altToFeet(alt);
+  if (ft === null) return "#9ca3af";   // unknown → grey
+  if (ft === 0)    return "#9ca3af";   // ground  → grey
+  if (ft <  2_000) return "#4ade80";   // lime
+  if (ft < 10_000) return "#a3e635";   // yellow-green
+  if (ft < 20_000) return "#fbbf24";   // amber
+  if (ft < 30_000) return "#38bdf8";   // sky blue
+  return "#c084fc";                     // violet
 }
 
 /** Top-down airplane SVG path (nose pointing up / north at 0°). */
@@ -138,14 +160,16 @@ function planeSvg(color, heading, size = 22) {
 
 function formatPopupAlt(alt) {
   if (alt === undefined || alt === null) return "--";
-  if (typeof alt === "string") return alt;
-  const n = Math.round(alt);
-  if (n >= 18_000) return `FL${Math.round(n / 100)}`;
-  return `${n.toLocaleString()} ft`;
+  const ft = altToFeet(alt);
+  if (ft === null) return "--";
+  if (ft === 0)    return "GND";
+  const m = Math.round((ft * FEET_TO_METRES) / 10) * 10;
+  return `${m.toLocaleString()} m`;
 }
 
 function formatPopupSpeed(gs) {
-  return gs != null ? `${Math.round(gs)} kt` : "--";
+  if (gs == null) return "--";
+  return `${Math.round(gs * KNOTS_TO_KMH)} km/h`;
 }
 
 // ---------------------------------------------------------------------------
@@ -478,7 +502,7 @@ class PlaneSightMapCard extends HTMLElement {
       const labelLat = this._receiverLat + (nm / 60); // rough degree offset
       const label = window.L.marker([labelLat, this._receiverLon], {
         icon: window.L.divIcon({
-          html: `<span class="ring-label">${nm}nm</span>`,
+          html: `<span class="ring-label">${Math.round(nm * NM_TO_KM)}km</span>`,
           className: "",
           iconSize: [40, 16],
           iconAnchor: [20, 8],
@@ -657,14 +681,23 @@ class PlaneSightMapCard extends HTMLElement {
   _popupHtml(ac) {
     const flight = ac.flight || ac.hex || "unknown";
     const type   = ac.t || "--";
-    const alt    = formatPopupAlt(ac.alt_baro);
+    // Use baro altitude, fall back to geometric
+    const altSrc = (ac.alt_baro !== undefined && ac.alt_baro !== null) ? ac.alt_baro : ac.alt_geom;
+    const alt    = formatPopupAlt(altSrc);
     const speed  = formatPopupSpeed(ac.gs);
-    const dist   = ac.distance_nm != null ? `${ac.distance_nm} nm` : "--";
+    const dist   = ac.distance_nm != null
+      ? `${(ac.distance_nm * NM_TO_KM).toFixed(1)} km`
+      : "--";
     const hdg    = ac.track != null ? `${Math.round(ac.track)}°` : "--";
+    // baro_rate is in ft/min → convert to m/min
     const vs     = ac.baro_rate != null
-      ? (ac.baro_rate > 200 ? `↑ ${ac.baro_rate} fpm`
-      : ac.baro_rate < -200 ? `↓ ${Math.abs(ac.baro_rate)} fpm`
-      : "level") : "--";
+      ? (() => {
+          const mpm = Math.round(ac.baro_rate * FEET_TO_METRES);
+          if (ac.baro_rate > 200)  return `↑ ${mpm} m/min`;
+          if (ac.baro_rate < -200) return `↓ ${Math.abs(mpm)} m/min`;
+          return "level";
+        })()
+      : "--";
 
     return `
       <div class="ps-pop">
