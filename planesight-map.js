@@ -433,26 +433,35 @@ class PlaneSightMapCard extends HTMLElement {
 
     // ── Aircraft photo: fetch from planespotters.net on popup open ────────
     this._map.on("popupopen", (e) => {
-      // Use rAF so Leaflet has finished injecting the popup content into DOM
-      requestAnimationFrame(() => {
-        const popup    = e.popup;
-        const container = popup.getElement();
-        const photoDiv  = container?.querySelector(".pop-photo[data-hex]");
-        if (!photoDiv) return;
+      this._resolvePopupPhoto(e.popup);
+    });
+  }
 
-        // Strip tar1090 synthetic-address prefix (~) and normalise to uppercase
-        const rawHex = photoDiv.dataset.hex || "";
-        const hex    = rawHex.replace(/^~/, "").toUpperCase();
+  _resolvePopupPhoto(popup) {
+    // Use rAF so Leaflet has finished injecting the popup content into DOM.
+    requestAnimationFrame(() => {
+      const container = popup?.getElement?.();
+      const photoDiv  = container?.querySelector(".pop-photo[data-hex]");
+      if (
+        !photoDiv ||
+        photoDiv.dataset.photoState === "loading" ||
+        photoDiv.dataset.photoState === "loaded"
+      ) return;
 
-        // Must look like a real ICAO address (6 hex digits)
-        if (!/^[0-9A-F]{6}$/.test(hex)) {
-          photoDiv.remove();
-          return;
-        }
+      // Strip tar1090 synthetic-address prefix (~) and normalise to uppercase.
+      const rawHex = photoDiv.dataset.hex || "";
+      const hex    = rawHex.replace(/^~/, "").toUpperCase();
 
-        this._loadPhoto(hex).then((result) => {
-          this._applyPhoto(photoDiv, result, popup, hex);
-        });
+      // Must look like a real ICAO address (6 hex digits).
+      if (!/^[0-9A-F]{6}$/.test(hex)) {
+        photoDiv.remove();
+        this._updatePopupLayout(popup);
+        return;
+      }
+
+      photoDiv.dataset.photoState = "loading";
+      this._loadPhoto(hex).then((result) => {
+        this._applyPhoto(photoDiv, result, popup, hex);
       });
     });
   }
@@ -465,7 +474,16 @@ class PlaneSightMapCard extends HTMLElement {
       return this._photoPromises.get(hex);
     }
 
-    const promise = fetch(`https://api.planespotters.net/pub/photos/hex/${hex}`)
+    const controller = typeof AbortController !== "undefined"
+      ? new AbortController()
+      : null;
+    const timeout = controller
+      ? setTimeout(() => controller.abort(), 8000)
+      : null;
+
+    const promise = fetch(`https://api.planespotters.net/pub/photos/hex/${hex}`, {
+        signal: controller?.signal,
+      })
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
         const photo = data?.photos?.[0] ?? null;
@@ -483,7 +501,11 @@ class PlaneSightMapCard extends HTMLElement {
         this._photoCache.set(hex, null);
         return null;
       })
-      .finally(() => this._photoPromises.delete(hex));
+      .then((result) => {
+        if (timeout) clearTimeout(timeout);
+        this._photoPromises.delete(hex);
+        return result;
+      });
 
     this._photoPromises.set(hex, promise);
     return promise;
@@ -504,13 +526,14 @@ class PlaneSightMapCard extends HTMLElement {
       this._updatePopupLayout(popup);
       return;
     }
+    photoDiv.dataset.photoState = "loaded";
     photoDiv.dataset.photoSrc = result.src;
     photoDiv.classList.remove("is-loading");
     photoDiv.classList.add("has-photo");
     photoDiv.innerHTML = `
       <a href="${result.link}" target="_blank" rel="noopener noreferrer">
         <img class="pop-photo-img" src="${result.src}" alt="Aircraft photo"
-             decoding="async" loading="lazy">
+             decoding="async">
       </a>
       <div class="pop-photo-credit">${result.credit} / planespotters.net</div>`;
 
@@ -813,6 +836,7 @@ class PlaneSightMapCard extends HTMLElement {
             autoPanPaddingTopLeft: [12, 72],
             autoPanPaddingBottomRight: [12, 12],
           })
+          .on("popupopen", (e) => this._resolvePopupPhoto(e.popup || marker.getPopup()))
           .addTo(this._map);
         this._markers.set(key, marker);
       }
