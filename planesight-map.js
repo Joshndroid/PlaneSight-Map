@@ -200,6 +200,7 @@ class PlaneSightMapCard extends HTMLElement {
     this._leafletCssInjected = false;
     this._visibilityHandler = () => this._recoverMap();
     this._windowResizeHandler = () => this._recoverMap();
+    this._photoCache   = new Map();   // hex → photo URL or null
   }
 
   _isValidCoordinate(lat, lon) {
@@ -429,6 +430,55 @@ class PlaneSightMapCard extends HTMLElement {
     // Default view — will be re-centred to HA home, then receiver when known.
     this._map.setView([0, 0], 5);
     this._setHomeDefaultView();
+
+    // ── Aircraft photo: fetch from planespotters.net on popup open ────────
+    this._map.on("popupopen", (e) => {
+      const container = e.popup.getElement();
+      const photoDiv  = container?.querySelector(".pop-photo[data-hex]");
+      if (!photoDiv) return;
+
+      const hex = photoDiv.dataset.hex;
+      if (!hex) return;
+
+      // Already resolved (cached hit or miss)
+      if (this._photoCache.has(hex)) {
+        this._applyPhoto(photoDiv, this._photoCache.get(hex));
+        return;
+      }
+
+      fetch(`https://api.planespotters.net/pub/photos/hex/${hex}`)
+        .then((r) => r.json())
+        .then((data) => {
+          const photo = data.photos?.[0] ?? null;
+          const result = photo
+            ? {
+                src:  photo.thumbnail_large?.src || photo.thumbnail?.src,
+                link: photo.link || "#",
+                credit: photo.photographer || "planespotters.net",
+              }
+            : null;
+          this._photoCache.set(hex, result);
+          this._applyPhoto(photoDiv, result);
+        })
+        .catch(() => {
+          this._photoCache.set(hex, null);
+          this._applyPhoto(photoDiv, null);
+        });
+    });
+  }
+
+  _applyPhoto(photoDiv, result) {
+    if (!photoDiv) return;
+    if (!result || !result.src) {
+      photoDiv.remove();
+      return;
+    }
+    photoDiv.innerHTML = `
+      <a href="${result.link}" target="_blank" rel="noopener noreferrer">
+        <img class="pop-photo-img" src="${result.src}" alt="Aircraft photo"
+             onerror="this.closest('.pop-photo').remove()">
+      </a>
+      <div class="pop-photo-credit">📷 ${result.credit} / planespotters.net</div>`;
   }
 
   _watchMapSize() {
@@ -670,7 +720,7 @@ class PlaneSightMapCard extends HTMLElement {
       } else {
         const marker = window.L.marker(pos, { icon })
           .bindPopup(this._popupHtml(ac), {
-            maxWidth: 200,
+            maxWidth: 260,
             className: "ps-popup",
           })
           .addTo(this._map);
@@ -711,6 +761,9 @@ class PlaneSightMapCard extends HTMLElement {
 
     return `
       <div class="ps-pop">
+        <div class="pop-photo" data-hex="${ac.hex || ""}">
+          <div class="pop-photo-loading">Loading photo…</div>
+        </div>
         <div class="pop-callsign">${flight}</div>
         <div class="pop-type">${type}</div>
         <table class="pop-table">
@@ -869,6 +922,35 @@ class PlaneSightMapCard extends HTMLElement {
       .pop-table tr:last-child td { border-bottom: none; }
       .pop-table td:first-child { color: #4a6080; width: 55px; }
       .pop-table td:last-child  { color: #a0c0e0; font-weight: 600; }
+
+      /* ── Aircraft photo ─────────────────────────────────────────────── */
+      .pop-photo {
+        margin-bottom: 8px;
+        min-height: 18px;
+      }
+      .pop-photo-loading {
+        color: #3a5070;
+        font-size: 10px;
+        font-style: italic;
+        font-family: 'JetBrains Mono', 'Courier New', monospace;
+      }
+      .pop-photo-img {
+        display: block;
+        width: 100%;
+        border-radius: 4px;
+        border: 1px solid #1e3050;
+      }
+      .pop-photo-credit {
+        font-size: 9px;
+        color: #3a5070;
+        margin-top: 3px;
+        text-align: right;
+        font-family: 'JetBrains Mono', 'Courier New', monospace;
+      }
+      .pop-photo-credit a {
+        color: #3a5070;
+        text-decoration: none;
+      }
     `;
   }
 }
