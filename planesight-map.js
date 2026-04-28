@@ -202,6 +202,8 @@ class PlaneSightMapCard extends HTMLElement {
     this._windowResizeHandler = () => this._recoverMap();
     this._photoCache   = new Map();   // hex → photo URL or null
     this._photoPromises = new Map();   // hex → in-flight planespotters lookup
+    this._activePopup   = null;
+    this._popupCloseResetTimer = null;
   }
 
   _isValidCoordinate(lat, lon) {
@@ -318,6 +320,10 @@ class PlaneSightMapCard extends HTMLElement {
       clearInterval(this._pollTimer);
       this._pollTimer = null;
     }
+    if (this._popupCloseResetTimer) {
+      clearTimeout(this._popupCloseResetTimer);
+      this._popupCloseResetTimer = null;
+    }
     if (this._map) {
       this._map.remove();
       this._map = null;
@@ -327,6 +333,7 @@ class PlaneSightMapCard extends HTMLElement {
     this._recvMarker = null;
     this._rangeRings = [];
     this._markers.clear();
+    this._activePopup = null;
     // Reset fetch flags so a new boot re-fetches receiver position and
     // re-processes the first entity-mode state it receives.
     this._recvFetched = false;
@@ -433,7 +440,40 @@ class PlaneSightMapCard extends HTMLElement {
 
     // ── Aircraft photo: fetch from planespotters.net on popup open ────────
     this._map.on("popupopen", (e) => {
+      this._activePopup = e.popup;
+      if (this._popupCloseResetTimer) {
+        clearTimeout(this._popupCloseResetTimer);
+        this._popupCloseResetTimer = null;
+      }
       this._resolvePopupPhoto(e.popup);
+    });
+    this._map.on("popupclose", (e) => {
+      if (this._activePopup === e.popup) this._activePopup = null;
+      this._schedulePopupCloseRecenter();
+    });
+  }
+
+  _schedulePopupCloseRecenter() {
+    if (this._popupCloseResetTimer) {
+      clearTimeout(this._popupCloseResetTimer);
+    }
+    this._popupCloseResetTimer = setTimeout(() => {
+      this._popupCloseResetTimer = null;
+      if (!this._activePopup) this._recenterHomeView();
+    }, 150);
+  }
+
+  _recenterHomeView() {
+    if (!this._map) return;
+    const home = this._homeLocation();
+    const center = home || (
+      this._isValidCoordinate(this._receiverLat, this._receiverLon)
+        ? { lat: this._receiverLat, lon: this._receiverLon }
+        : null
+    );
+    if (!center) return;
+    this._map.setView([center.lat, center.lon], this._config.default_zoom || 8, {
+      animate: true,
     });
   }
 
@@ -558,21 +598,23 @@ class PlaneSightMapCard extends HTMLElement {
     photoDiv.classList.remove("is-loading");
     photoDiv.classList.add("has-photo");
     photoDiv.innerHTML = `
-      <a href="${result.link}" target="_blank" rel="noopener noreferrer">
-        <img class="pop-photo-img" src="${result.src}" alt="Aircraft photo"
-             decoding="async">
+      <a class="pop-photo-link" href="${result.link}" target="_blank" rel="noopener noreferrer">
+        <img class="pop-photo-img" alt="Aircraft photo" decoding="async">
       </a>
       <div class="pop-photo-credit">${result.credit} / planespotters.net</div>`;
 
-    if (popup) {
-      const img = photoDiv.querySelector("img");
-      if (img) {
+    const img = photoDiv.querySelector("img");
+    if (img) {
+      if (popup) {
         img.addEventListener("load",  () => this._updatePopupLayout(popup), { once: true });
         img.addEventListener("error", () => {
           photoDiv.remove();
           this._updatePopupLayout(popup);
         }, { once: true });
       }
+      img.src = result.src;
+    }
+    if (popup) {
       this._updatePopupLayout(popup);
     }
   }
@@ -1111,19 +1153,24 @@ class PlaneSightMapCard extends HTMLElement {
         align-items: center;
         justify-content: center;
       }
+      .pop-photo.has-photo {
+        display: block;
+      }
       .pop-photo-loading {
         color: #3a5070;
         font-size: 10px;
         font-style: italic;
         font-family: 'JetBrains Mono', 'Courier New', monospace;
       }
+      .pop-photo-link,
       .pop-photo-img {
+        position: absolute;
+        inset: 0;
         display: block;
         width: 100%;
         height: 100%;
-        object-fit: cover;
-        border-radius: 4px;
       }
+      .pop-photo-img { object-fit: cover; }
       .pop-photo-credit {
         position: absolute;
         right: 0;
