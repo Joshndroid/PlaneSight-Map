@@ -521,6 +521,41 @@ class PlaneSightMapCard extends HTMLElement {
     return /^[0-9A-F]{6}$/.test(hex) ? hex : "";
   }
 
+  _photoHtml(ac) {
+    const rawHex = ac?.hex || "";
+    const hex = rawHex.replace(/^~/, "").toUpperCase();
+    const escapedHex = this._escapeHtml(rawHex);
+    const result = /^[0-9A-F]{6}$/.test(hex) && this._photoCache.has(hex)
+      ? this._photoCache.get(hex)
+      : undefined;
+
+    if (result && result.src) {
+      return `
+        <div class="pop-photo has-photo" data-hex="${escapedHex}" data-photo-src="${this._escapeHtml(result.src)}">
+          <a class="pop-photo-link" href="${this._escapeHtml(result.link || "#")}" target="_blank" rel="noopener noreferrer">
+            <img class="pop-photo-img" src="${this._escapeHtml(result.src)}" alt="Aircraft photo" decoding="async">
+          </a>
+          <div class="pop-photo-credit">${this._escapeHtml(result.credit || "planespotters.net")} / planespotters.net</div>
+        </div>`;
+    }
+
+    if (result === null) return "";
+
+    return `
+        <div class="pop-photo is-loading" data-hex="${escapedHex}">
+          <div class="pop-photo-loading">Loading photo…</div>
+        </div>`;
+  }
+
+  _escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
   _applyPhotoToPopup(popup, hex, result, attempt = 0) {
     const container = popup?.getElement?.();
     const photoDiv = container?.querySelector(".pop-photo[data-hex]");
@@ -1016,9 +1051,7 @@ class PlaneSightMapCard extends HTMLElement {
 
     return `
       <div class="ps-pop">
-        <div class="pop-photo is-loading" data-hex="${ac.hex || ""}">
-          <div class="pop-photo-loading">Loading photo…</div>
-        </div>
+        ${this._photoHtml(ac)}
         <div class="pop-callsign" data-pop-field="flight">${flight}</div>
         <div class="pop-type" data-pop-field="type">${type}</div>
         <table class="pop-table">
