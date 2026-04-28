@@ -594,28 +594,45 @@ class PlaneSightMapCard extends HTMLElement {
       this._updatePopupLayout(popup);
       return;
     }
-    photoDiv.dataset.photoSrc = result.src;
-    photoDiv.classList.remove("is-loading");
-    photoDiv.classList.add("has-photo");
-    photoDiv.innerHTML = `
-      <a class="pop-photo-link" href="${result.link}" target="_blank" rel="noopener noreferrer">
-        <img class="pop-photo-img" alt="Aircraft photo" decoding="async">
-      </a>
-      <div class="pop-photo-credit">${result.credit} / planespotters.net</div>`;
+    const img = new Image();
+    img.className = "pop-photo-img";
+    img.alt = "Aircraft photo";
+    img.decoding = "async";
 
-    const img = photoDiv.querySelector("img");
-    if (img) {
-      if (popup) {
-        img.addEventListener("load",  () => this._updatePopupLayout(popup), { once: true });
-        img.addEventListener("error", () => {
-          photoDiv.remove();
-          this._updatePopupLayout(popup);
-        }, { once: true });
-      }
-      img.src = result.src;
-    }
-    if (popup) {
+    const showLoadedPhoto = () => {
+      const currentHex = (photoDiv.dataset.hex || "").replace(/^~/, "").toUpperCase();
+      if (expectedHex && currentHex !== expectedHex) return;
+
+      const frame = document.createElement("div");
+      frame.className = "pop-photo has-photo";
+      frame.dataset.hex = photoDiv.dataset.hex || "";
+      frame.dataset.photoSrc = result.src;
+
+      const link = document.createElement("a");
+      link.className = "pop-photo-link";
+      link.href = result.link || "#";
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.appendChild(img);
+
+      const credit = document.createElement("div");
+      credit.className = "pop-photo-credit";
+      credit.textContent = `${result.credit} / planespotters.net`;
+
+      frame.appendChild(link);
+      frame.appendChild(credit);
+      photoDiv.replaceWith(frame);
       this._updatePopupLayout(popup);
+    };
+
+    img.addEventListener("load", showLoadedPhoto, { once: true });
+    img.addEventListener("error", () => {
+      photoDiv.remove();
+      this._updatePopupLayout(popup);
+    }, { once: true });
+    img.src = result.src;
+    if (img.complete && img.naturalWidth > 0) {
+      showLoadedPhoto();
     }
   }
 
@@ -1156,6 +1173,9 @@ class PlaneSightMapCard extends HTMLElement {
       .pop-photo.has-photo {
         display: block;
       }
+      .pop-photo.has-photo .pop-photo-loading {
+        display: none;
+      }
       .pop-photo-loading {
         color: #3a5070;
         font-size: 10px;
@@ -1170,6 +1190,7 @@ class PlaneSightMapCard extends HTMLElement {
         width: 100%;
         height: 100%;
       }
+      .pop-photo-link { z-index: 1; }
       .pop-photo-img { object-fit: cover; }
       .pop-photo-credit {
         position: absolute;
@@ -1182,6 +1203,7 @@ class PlaneSightMapCard extends HTMLElement {
         padding: 12px 5px 3px;
         text-align: right;
         font-family: 'JetBrains Mono', 'Courier New', monospace;
+        z-index: 2;
       }
       .pop-photo-credit a {
         color: #3a5070;
