@@ -201,6 +201,7 @@ class PlaneSightMapCard extends HTMLElement {
     this._visibilityHandler = () => this._recoverMap();
     this._windowResizeHandler = () => this._recoverMap();
     this._photoCache   = new Map();   // hex → photo URL or null
+    this._photoPromises = new Map();   // hex → in-flight planespotters lookup
   }
 
   _isValidCoordinate(lat, lon) {
@@ -449,56 +450,118 @@ class PlaneSightMapCard extends HTMLElement {
           return;
         }
 
-        // Already resolved (cached hit or miss)
-        if (this._photoCache.has(hex)) {
-          this._applyPhoto(photoDiv, this._photoCache.get(hex), popup);
-          return;
-        }
-
-        fetch(`https://api.planespotters.net/pub/photos/hex/${hex}`)
-          .then((r) => r.json())
-          .then((data) => {
-            const photo  = data.photos?.[0] ?? null;
-            const result = photo
-              ? {
-                  src:    photo.thumbnail_large?.src || photo.thumbnail?.src,
-                  link:   photo.link || "#",
-                  credit: photo.photographer || "planespotters.net",
-                }
-              : null;
-            this._photoCache.set(hex, result);
-            this._applyPhoto(photoDiv, result, popup);
-          })
-          .catch(() => {
-            this._photoCache.set(hex, null);
-            this._applyPhoto(photoDiv, null, popup);
-          });
+        this._loadPhoto(hex).then((result) => {
+          this._applyPhoto(photoDiv, result, popup, hex);
+        });
       });
     });
   }
 
-  _applyPhoto(photoDiv, result, popup) {
+  _loadPhoto(hex) {
+    if (this._photoCache.has(hex)) {
+      return Promise.resolve(this._photoCache.get(hex));
+    }
+    if (this._photoPromises.has(hex)) {
+      return this._photoPromises.get(hex);
+    }
+
+    const promise = fetch(`https://api.planespotters.net/pub/photos/hex/${hex}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        const photo = data?.photos?.[0] ?? null;
+        const result = photo
+          ? {
+              src:    photo.thumbnail_large?.src || photo.thumbnail?.src,
+              link:   photo.link || "#",
+              credit: photo.photographer || "planespotters.net",
+            }
+          : null;
+        this._photoCache.set(hex, result);
+        return result;
+      })
+      .catch(() => {
+        this._photoCache.set(hex, null);
+        return null;
+      })
+      .finally(() => this._photoPromises.delete(hex));
+
+    this._photoPromises.set(hex, promise);
+    return promise;
+  }
+
+  _applyPhoto(photoDiv, result, popup, expectedHex = null) {
     if (!photoDiv) return;
+    if (expectedHex) {
+      const currentHex = (photoDiv.dataset.hex || "").replace(/^~/, "").toUpperCase();
+      if (currentHex !== expectedHex) return;
+    }
     if (!result || !result.src) {
       photoDiv.remove();
-      if (popup) popup.update();
+      this._updatePopupLayout(popup);
       return;
     }
+    if (photoDiv.dataset.photoSrc === result.src) {
+      this._updatePopupLayout(popup);
+      return;
+    }
+    photoDiv.dataset.photoSrc = result.src;
+    photoDiv.classList.remove("is-loading");
+    photoDiv.classList.add("has-photo");
     photoDiv.innerHTML = `
       <a href="${result.link}" target="_blank" rel="noopener noreferrer">
         <img class="pop-photo-img" src="${result.src}" alt="Aircraft photo"
-             onerror="this.closest('.pop-photo').remove()">
+             decoding="async" loading="lazy">
       </a>
-      <div class="pop-photo-credit">📷 ${result.credit} / planespotters.net</div>`;
+      <div class="pop-photo-credit">${result.credit} / planespotters.net</div>`;
 
-    // Once the image has rendered and the popup knows its new height,
-    // call popup.update() so Leaflet re-pans to keep it fully on-screen.
     if (popup) {
       const img = photoDiv.querySelector("img");
       if (img) {
-        img.addEventListener("load",  () => popup.update(), { once: true });
-        img.addEventListener("error", () => popup.update(), { once: true });
+        img.addEventListener("load",  () => this._updatePopupLayout(popup), { once: true });
+        img.addEventListener("error", () => {
+          photoDiv.remove();
+          this._updatePopupLayout(popup);
+        }, { once: true });
       }
+      this._updatePopupLayout(popup);
+    }
+  }
+
+  _updatePopupLayout(popup) {
+    if (!popup || !this._map) return;
+    requestAnimationFrame(() => {
+      if (!this._map || !popup.isOpen?.()) return;
+      popup.update();
+      requestAnimationFrame(() => this._panPopupIntoView(popup));
+    });
+  }
+
+  _panPopupIntoView(popup) {
+    if (!this._map || !popup?.getElement) return;
+    const popupEl = popup.getElement();
+    const mapEl = this._map.getContainer();
+    if (!popupEl || !mapEl) return;
+
+    const popupRect = popupEl.getBoundingClientRect();
+    const mapRect = mapEl.getBoundingClientRect();
+    const padding = 12;
+    let dx = 0;
+    let dy = 0;
+
+    if (popupRect.top < mapRect.top + padding) {
+      dy = popupRect.top - mapRect.top - padding;
+    } else if (popupRect.bottom > mapRect.bottom - padding) {
+      dy = popupRect.bottom - mapRect.bottom + padding;
+    }
+
+    if (popupRect.left < mapRect.left + padding) {
+      dx = popupRect.left - mapRect.left - padding;
+    } else if (popupRect.right > mapRect.right - padding) {
+      dx = popupRect.right - mapRect.right + padding;
+    }
+
+    if (dx || dy) {
+      this._map.panBy([dx, dy], { animate: false });
     }
   }
 
@@ -734,20 +797,11 @@ class PlaneSightMapCard extends HTMLElement {
         const marker = this._markers.get(key);
         marker.setLatLng(pos);
         marker.setIcon(icon);
-        // Update popup content without reopening it; re-apply cached photo
         if (marker.getPopup()) {
-          marker.getPopup().setContent(this._popupHtml(ac));
-          // If this popup is currently open, re-inject any cached photo immediately
-          // (setContent wipes the DOM, so the photo placeholder resets to "Loading…")
           if (marker.isPopupOpen()) {
-            const el = marker.getPopup().getElement();
-            const photoDiv = el?.querySelector(".pop-photo[data-hex]");
-            if (photoDiv) {
-              const hex = (photoDiv.dataset.hex || "").replace(/^~/, "").toUpperCase();
-              if (this._photoCache.has(hex)) {
-                this._applyPhoto(photoDiv, this._photoCache.get(hex), marker.getPopup());
-              }
-            }
+            this._updateOpenPopup(marker.getPopup(), ac);
+          } else {
+            marker.getPopup().setContent(this._popupHtml(ac));
           }
         }
       } else {
@@ -755,6 +809,9 @@ class PlaneSightMapCard extends HTMLElement {
           .bindPopup(this._popupHtml(ac), {
             maxWidth: 260,
             className: "ps-popup",
+            keepInView: true,
+            autoPanPaddingTopLeft: [12, 72],
+            autoPanPaddingBottomRight: [12, 12],
           })
           .addTo(this._map);
         this._markers.set(key, marker);
@@ -771,7 +828,7 @@ class PlaneSightMapCard extends HTMLElement {
     }
   }
 
-  _popupHtml(ac) {
+  _popupValues(ac) {
     const flight = ac.flight || ac.hex || "unknown";
     const type   = ac.t || "--";
     // Use baro altitude, fall back to geometric
@@ -792,19 +849,36 @@ class PlaneSightMapCard extends HTMLElement {
         })()
       : "--";
 
+    return { flight, type, alt, speed, dist, hdg, vs };
+  }
+
+  _updateOpenPopup(popup, ac) {
+    const el = popup?.getElement?.();
+    if (!el) return;
+    const values = this._popupValues(ac);
+    for (const [key, value] of Object.entries(values)) {
+      const target = el.querySelector(`[data-pop-field="${key}"]`);
+      if (target && target.textContent !== value) target.textContent = value;
+    }
+    this._panPopupIntoView(popup);
+  }
+
+  _popupHtml(ac) {
+    const { flight, type, alt, speed, dist, hdg, vs } = this._popupValues(ac);
+
     return `
       <div class="ps-pop">
-        <div class="pop-photo" data-hex="${ac.hex || ""}">
+        <div class="pop-photo is-loading" data-hex="${ac.hex || ""}">
           <div class="pop-photo-loading">Loading photo…</div>
         </div>
-        <div class="pop-callsign">${flight}</div>
-        <div class="pop-type">${type}</div>
+        <div class="pop-callsign" data-pop-field="flight">${flight}</div>
+        <div class="pop-type" data-pop-field="type">${type}</div>
         <table class="pop-table">
-          <tr><td>Alt</td>     <td>${alt}</td></tr>
-          <tr><td>V/S</td>     <td>${vs}</td></tr>
-          <tr><td>Speed</td>   <td>${speed}</td></tr>
-          <tr><td>Heading</td> <td>${hdg}</td></tr>
-          <tr><td>Distance</td><td>${dist}</td></tr>
+          <tr><td>Alt</td>     <td data-pop-field="alt">${alt}</td></tr>
+          <tr><td>V/S</td>     <td data-pop-field="vs">${vs}</td></tr>
+          <tr><td>Speed</td>   <td data-pop-field="speed">${speed}</td></tr>
+          <tr><td>Heading</td> <td data-pop-field="hdg">${hdg}</td></tr>
+          <tr><td>Distance</td><td data-pop-field="dist">${dist}</td></tr>
         </table>
       </div>`;
   }
@@ -958,8 +1032,23 @@ class PlaneSightMapCard extends HTMLElement {
 
       /* ── Aircraft photo ─────────────────────────────────────────────── */
       .pop-photo {
+        position: relative;
         margin-bottom: 8px;
+        width: 100%;
         min-height: 18px;
+        overflow: hidden;
+      }
+      .pop-photo.is-loading,
+      .pop-photo.has-photo {
+        aspect-ratio: 16 / 9;
+        background: #09111c;
+        border: 1px solid #1e3050;
+        border-radius: 4px;
+      }
+      .pop-photo.is-loading {
+        display: flex;
+        align-items: center;
+        justify-content: center;
       }
       .pop-photo-loading {
         color: #3a5070;
@@ -970,13 +1059,19 @@ class PlaneSightMapCard extends HTMLElement {
       .pop-photo-img {
         display: block;
         width: 100%;
+        height: 100%;
+        object-fit: cover;
         border-radius: 4px;
-        border: 1px solid #1e3050;
       }
       .pop-photo-credit {
+        position: absolute;
+        right: 0;
+        bottom: 0;
+        left: 0;
         font-size: 9px;
-        color: #3a5070;
-        margin-top: 3px;
+        color: #8aa0bd;
+        background: linear-gradient(to top, rgba(9,17,28,0.88), rgba(9,17,28,0));
+        padding: 12px 5px 3px;
         text-align: right;
         font-family: 'JetBrains Mono', 'Courier New', monospace;
       }
