@@ -268,7 +268,6 @@ class PlaneSightMapCard extends HTMLElement {
     this._hass = hass;
     if (this._mapReady) {
       this._setHomeDefaultView();
-      this._recoverMap();
     }
     // Entity mode: HA calls set hass on every entity change in the system.
     // Only process when the PlaneSight sensor itself has actually updated.
