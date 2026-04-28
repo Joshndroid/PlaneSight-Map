@@ -435,7 +435,8 @@ class PlaneSightMapCard extends HTMLElement {
     this._map.on("popupopen", (e) => {
       // Use rAF so Leaflet has finished injecting the popup content into DOM
       requestAnimationFrame(() => {
-        const container = e.popup.getElement();
+        const popup    = e.popup;
+        const container = popup.getElement();
         const photoDiv  = container?.querySelector(".pop-photo[data-hex]");
         if (!photoDiv) return;
 
@@ -451,7 +452,7 @@ class PlaneSightMapCard extends HTMLElement {
 
         // Already resolved (cached hit or miss)
         if (this._photoCache.has(hex)) {
-          this._applyPhoto(photoDiv, this._photoCache.get(hex));
+          this._applyPhoto(photoDiv, this._photoCache.get(hex), popup);
           return;
         }
 
@@ -467,20 +468,21 @@ class PlaneSightMapCard extends HTMLElement {
                 }
               : null;
             this._photoCache.set(hex, result);
-            this._applyPhoto(photoDiv, result);
+            this._applyPhoto(photoDiv, result, popup);
           })
           .catch(() => {
             this._photoCache.set(hex, null);
-            this._applyPhoto(photoDiv, null);
+            this._applyPhoto(photoDiv, null, popup);
           });
       });
     });
   }
 
-  _applyPhoto(photoDiv, result) {
+  _applyPhoto(photoDiv, result, popup) {
     if (!photoDiv) return;
     if (!result || !result.src) {
       photoDiv.remove();
+      if (popup) popup.update();
       return;
     }
     photoDiv.innerHTML = `
@@ -489,6 +491,16 @@ class PlaneSightMapCard extends HTMLElement {
              onerror="this.closest('.pop-photo').remove()">
       </a>
       <div class="pop-photo-credit">📷 ${result.credit} / planespotters.net</div>`;
+
+    // Once the image has rendered and the popup knows its new height,
+    // call popup.update() so Leaflet re-pans to keep it fully on-screen.
+    if (popup) {
+      const img = photoDiv.querySelector("img");
+      if (img) {
+        img.addEventListener("load",  () => popup.update(), { once: true });
+        img.addEventListener("error", () => popup.update(), { once: true });
+      }
+    }
   }
 
   _watchMapSize() {
@@ -734,7 +746,7 @@ class PlaneSightMapCard extends HTMLElement {
             if (photoDiv) {
               const hex = (photoDiv.dataset.hex || "").replace(/^~/, "").toUpperCase();
               if (this._photoCache.has(hex)) {
-                this._applyPhoto(photoDiv, this._photoCache.get(hex));
+                this._applyPhoto(photoDiv, this._photoCache.get(hex), marker.getPopup());
               }
             }
           }
