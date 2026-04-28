@@ -723,9 +723,21 @@ class PlaneSightMapCard extends HTMLElement {
         const marker = this._markers.get(key);
         marker.setLatLng(pos);
         marker.setIcon(icon);
-        // Update popup content without reopening it
+        // Update popup content without reopening it; re-apply cached photo
         if (marker.getPopup()) {
           marker.getPopup().setContent(this._popupHtml(ac));
+          // If this popup is currently open, re-inject any cached photo immediately
+          // (setContent wipes the DOM, so the photo placeholder resets to "Loading…")
+          if (marker.isPopupOpen()) {
+            const el = marker.getPopup().getElement();
+            const photoDiv = el?.querySelector(".pop-photo[data-hex]");
+            if (photoDiv) {
+              const hex = (photoDiv.dataset.hex || "").replace(/^~/, "").toUpperCase();
+              if (this._photoCache.has(hex)) {
+                this._applyPhoto(photoDiv, this._photoCache.get(hex));
+              }
+            }
+          }
         }
       } else {
         const marker = window.L.marker(pos, { icon })
