@@ -757,6 +757,8 @@ class PlaneSightMapCard extends HTMLElement {
 
   _css(height) {
     return `
+      @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+
       :host { display: block; }
 
       ha-card {
@@ -789,7 +791,7 @@ class PlaneSightMapCard extends HTMLElement {
         border: 1px solid rgba(239,68,68,0.45);
         border-radius: 6px;
         color: #fca5a5;
-        font-family: monospace;
+        font-family: 'JetBrains Mono', monospace;
         font-size: 0.85em;
         padding: 8px 10px;
         text-align: left;
@@ -819,7 +821,7 @@ class PlaneSightMapCard extends HTMLElement {
 
       /* ── Range ring labels ──────────────────────────────────────────── */
       .ring-label {
-        font-family: 'Courier New', monospace;
+        font-family: 'JetBrains Mono', 'Courier New', monospace;
         font-size: 0.65em;
         color: #3a5070;
         white-space: nowrap;
@@ -839,7 +841,7 @@ class PlaneSightMapCard extends HTMLElement {
       .leaflet-popup-close-button { color: #4a6080 !important; }
 
       .ps-pop {
-        font-family: 'Courier New', monospace;
+        font-family: 'JetBrains Mono', 'Courier New', monospace;
         font-size: 12px;
         min-width: 160px;
         color: #c8d8e8;
