@@ -433,37 +433,47 @@ class PlaneSightMapCard extends HTMLElement {
 
     // ── Aircraft photo: fetch from planespotters.net on popup open ────────
     this._map.on("popupopen", (e) => {
-      const container = e.popup.getElement();
-      const photoDiv  = container?.querySelector(".pop-photo[data-hex]");
-      if (!photoDiv) return;
+      // Use rAF so Leaflet has finished injecting the popup content into DOM
+      requestAnimationFrame(() => {
+        const container = e.popup.getElement();
+        const photoDiv  = container?.querySelector(".pop-photo[data-hex]");
+        if (!photoDiv) return;
 
-      const hex = photoDiv.dataset.hex;
-      if (!hex) return;
+        // Strip tar1090 synthetic-address prefix (~) and normalise to uppercase
+        const rawHex = photoDiv.dataset.hex || "";
+        const hex    = rawHex.replace(/^~/, "").toUpperCase();
 
-      // Already resolved (cached hit or miss)
-      if (this._photoCache.has(hex)) {
-        this._applyPhoto(photoDiv, this._photoCache.get(hex));
-        return;
-      }
+        // Must look like a real ICAO address (6 hex digits)
+        if (!/^[0-9A-F]{6}$/.test(hex)) {
+          photoDiv.remove();
+          return;
+        }
 
-      fetch(`https://api.planespotters.net/pub/photos/hex/${hex}`)
-        .then((r) => r.json())
-        .then((data) => {
-          const photo = data.photos?.[0] ?? null;
-          const result = photo
-            ? {
-                src:  photo.thumbnail_large?.src || photo.thumbnail?.src,
-                link: photo.link || "#",
-                credit: photo.photographer || "planespotters.net",
-              }
-            : null;
-          this._photoCache.set(hex, result);
-          this._applyPhoto(photoDiv, result);
-        })
-        .catch(() => {
-          this._photoCache.set(hex, null);
-          this._applyPhoto(photoDiv, null);
-        });
+        // Already resolved (cached hit or miss)
+        if (this._photoCache.has(hex)) {
+          this._applyPhoto(photoDiv, this._photoCache.get(hex));
+          return;
+        }
+
+        fetch(`https://api.planespotters.net/pub/photos/hex/${hex}`)
+          .then((r) => r.json())
+          .then((data) => {
+            const photo  = data.photos?.[0] ?? null;
+            const result = photo
+              ? {
+                  src:    photo.thumbnail_large?.src || photo.thumbnail?.src,
+                  link:   photo.link || "#",
+                  credit: photo.photographer || "planespotters.net",
+                }
+              : null;
+            this._photoCache.set(hex, result);
+            this._applyPhoto(photoDiv, result);
+          })
+          .catch(() => {
+            this._photoCache.set(hex, null);
+            this._applyPhoto(photoDiv, null);
+          });
+      });
     });
   }
 
