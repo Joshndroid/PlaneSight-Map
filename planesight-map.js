@@ -448,11 +448,7 @@ class PlaneSightMapCard extends HTMLElement {
         }
         return;
       }
-      if (
-        photoDiv.dataset.photoState === "loading" ||
-        photoDiv.dataset.photoState === "loaded" ||
-        photoDiv.dataset.photoState === "none"
-      ) return;
+      if (photoDiv.dataset.photoSrc) return;
 
       // Strip tar1090 synthetic-address prefix (~) and normalise to uppercase.
       const rawHex = photoDiv.dataset.hex || "";
@@ -460,16 +456,41 @@ class PlaneSightMapCard extends HTMLElement {
 
       // Must look like a real ICAO address (6 hex digits).
       if (!/^[0-9A-F]{6}$/.test(hex)) {
-        this._showNoPhoto(photoDiv, popup);
+        photoDiv.remove();
         this._updatePopupLayout(popup);
         return;
       }
 
-      photoDiv.dataset.photoState = "loading";
       this._loadPhoto(hex).then((result) => {
-        this._applyPhoto(photoDiv, result, popup, hex);
+        this._applyPhotoToPopup(popup, hex, result);
       });
     });
+  }
+
+  _loadMarkerPhoto(marker, ac) {
+    const hex = this._photoHex(ac);
+    if (!hex) return;
+    this._loadPhoto(hex).then((result) => {
+      this._applyPhotoToPopup(marker.getPopup(), hex, result);
+    });
+  }
+
+  _photoHex(ac) {
+    const rawHex = ac?.hex || "";
+    const hex = rawHex.replace(/^~/, "").toUpperCase();
+    return /^[0-9A-F]{6}$/.test(hex) ? hex : "";
+  }
+
+  _applyPhotoToPopup(popup, hex, result, attempt = 0) {
+    const container = popup?.getElement?.();
+    const photoDiv = container?.querySelector(".pop-photo[data-hex]");
+    if (!photoDiv) {
+      if (attempt < 12) {
+        setTimeout(() => this._applyPhotoToPopup(popup, hex, result, attempt + 1), 50);
+      }
+      return;
+    }
+    this._applyPhoto(photoDiv, result, popup, hex);
   }
 
   _loadPhoto(hex) {
@@ -525,14 +546,14 @@ class PlaneSightMapCard extends HTMLElement {
       if (currentHex !== expectedHex) return;
     }
     if (!result || !result.src) {
-      this._showNoPhoto(photoDiv, popup);
+      photoDiv.remove();
+      this._updatePopupLayout(popup);
       return;
     }
     if (photoDiv.dataset.photoSrc === result.src) {
       this._updatePopupLayout(popup);
       return;
     }
-    photoDiv.dataset.photoState = "loaded";
     photoDiv.dataset.photoSrc = result.src;
     photoDiv.classList.remove("is-loading");
     photoDiv.classList.add("has-photo");
@@ -558,7 +579,6 @@ class PlaneSightMapCard extends HTMLElement {
 
   _showNoPhoto(photoDiv, popup) {
     if (!photoDiv) return;
-    photoDiv.dataset.photoState = "none";
     photoDiv.classList.remove("is-loading", "has-photo");
     photoDiv.classList.add("no-photo");
     photoDiv.innerHTML = `<div class="pop-photo-loading">No photo</div>`;
@@ -851,7 +871,7 @@ class PlaneSightMapCard extends HTMLElement {
             autoPanPaddingTopLeft: [12, 72],
             autoPanPaddingBottomRight: [12, 12],
           })
-          .on("click", () => setTimeout(() => this._resolvePopupPhoto(marker.getPopup()), 0))
+          .on("click", () => this._loadMarkerPhoto(marker, ac))
           .on("popupopen", (e) => this._resolvePopupPhoto(e.popup || marker.getPopup()))
           .addTo(this._map);
         this._markers.set(key, marker);
@@ -900,6 +920,7 @@ class PlaneSightMapCard extends HTMLElement {
       const target = el.querySelector(`[data-pop-field="${key}"]`);
       if (target && target.textContent !== value) target.textContent = value;
     }
+    this._resolvePopupPhoto(popup);
     this._panPopupIntoView(popup);
   }
 
