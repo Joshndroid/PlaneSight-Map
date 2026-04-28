@@ -621,8 +621,7 @@ class PlaneSightMapCard extends HTMLElement {
 
       frame.appendChild(link);
       frame.appendChild(credit);
-      photoDiv.replaceWith(frame);
-      this._updatePopupLayout(popup);
+      this._replacePopupPhotoContent(photoDiv, frame, popup);
     };
 
     img.addEventListener("load", showLoadedPhoto, { once: true });
@@ -634,6 +633,35 @@ class PlaneSightMapCard extends HTMLElement {
     if (img.complete && img.naturalWidth > 0) {
       showLoadedPhoto();
     }
+  }
+
+  _replacePopupPhotoContent(photoDiv, replacement, popup) {
+    if (!photoDiv || !replacement) return;
+    if (!popup) {
+      photoDiv.replaceWith(replacement);
+      return;
+    }
+
+    const root = photoDiv.closest(".ps-pop");
+    if (!root) {
+      photoDiv.replaceWith(replacement);
+      this._panPopupAfterContentChange(popup);
+      return;
+    }
+
+    const rootClone = root.cloneNode(true);
+    const oldPhoto = rootClone.querySelector(".pop-photo[data-hex]");
+    if (oldPhoto) oldPhoto.replaceWith(replacement.cloneNode(true));
+    popup.setContent(rootClone.outerHTML);
+    this._panPopupAfterContentChange(popup);
+  }
+
+  _panPopupAfterContentChange(popup) {
+    if (!popup || !this._map) return;
+    requestAnimationFrame(() => {
+      if (!this._map || !popup.isOpen?.()) return;
+      requestAnimationFrame(() => this._panPopupIntoView(popup));
+    });
   }
 
   _showNoPhoto(photoDiv, popup) {
