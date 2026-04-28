@@ -437,15 +437,21 @@ class PlaneSightMapCard extends HTMLElement {
     });
   }
 
-  _resolvePopupPhoto(popup) {
+  _resolvePopupPhoto(popup, attempt = 0) {
     // Use rAF so Leaflet has finished injecting the popup content into DOM.
     requestAnimationFrame(() => {
       const container = popup?.getElement?.();
       const photoDiv  = container?.querySelector(".pop-photo[data-hex]");
+      if (!photoDiv) {
+        if (attempt < 12) {
+          setTimeout(() => this._resolvePopupPhoto(popup, attempt + 1), 50);
+        }
+        return;
+      }
       if (
-        !photoDiv ||
         photoDiv.dataset.photoState === "loading" ||
-        photoDiv.dataset.photoState === "loaded"
+        photoDiv.dataset.photoState === "loaded" ||
+        photoDiv.dataset.photoState === "none"
       ) return;
 
       // Strip tar1090 synthetic-address prefix (~) and normalise to uppercase.
@@ -454,7 +460,7 @@ class PlaneSightMapCard extends HTMLElement {
 
       // Must look like a real ICAO address (6 hex digits).
       if (!/^[0-9A-F]{6}$/.test(hex)) {
-        photoDiv.remove();
+        this._showNoPhoto(photoDiv, popup);
         this._updatePopupLayout(popup);
         return;
       }
@@ -477,32 +483,33 @@ class PlaneSightMapCard extends HTMLElement {
     const controller = typeof AbortController !== "undefined"
       ? new AbortController()
       : null;
-    const timeout = controller
-      ? setTimeout(() => controller.abort(), 8000)
-      : null;
 
-    const promise = fetch(`https://api.planespotters.net/pub/photos/hex/${hex}`, {
-        signal: controller?.signal,
+    const fetchPromise = fetch(`https://api.planespotters.net/pub/photos/hex/${hex}`, {
+        signal: controller ? controller.signal : undefined,
       })
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
         const photo = data?.photos?.[0] ?? null;
-        const result = photo
+        return photo
           ? {
               src:    photo.thumbnail_large?.src || photo.thumbnail?.src,
               link:   photo.link || "#",
               credit: photo.photographer || "planespotters.net",
             }
           : null;
-        this._photoCache.set(hex, result);
-        return result;
-      })
-      .catch(() => {
-        this._photoCache.set(hex, null);
-        return null;
-      })
+      });
+
+    const timeoutPromise = new Promise((resolve) => {
+      setTimeout(() => {
+        if (controller) controller.abort();
+        resolve(null);
+      }, 8000);
+    });
+
+    const promise = Promise.race([fetchPromise, timeoutPromise])
+      .catch(() => null)
       .then((result) => {
-        if (timeout) clearTimeout(timeout);
+        this._photoCache.set(hex, result);
         this._photoPromises.delete(hex);
         return result;
       });
@@ -518,8 +525,7 @@ class PlaneSightMapCard extends HTMLElement {
       if (currentHex !== expectedHex) return;
     }
     if (!result || !result.src) {
-      photoDiv.remove();
-      this._updatePopupLayout(popup);
+      this._showNoPhoto(photoDiv, popup);
       return;
     }
     if (photoDiv.dataset.photoSrc === result.src) {
@@ -548,6 +554,15 @@ class PlaneSightMapCard extends HTMLElement {
       }
       this._updatePopupLayout(popup);
     }
+  }
+
+  _showNoPhoto(photoDiv, popup) {
+    if (!photoDiv) return;
+    photoDiv.dataset.photoState = "none";
+    photoDiv.classList.remove("is-loading", "has-photo");
+    photoDiv.classList.add("no-photo");
+    photoDiv.innerHTML = `<div class="pop-photo-loading">No photo</div>`;
+    this._updatePopupLayout(popup);
   }
 
   _updatePopupLayout(popup) {
@@ -836,6 +851,7 @@ class PlaneSightMapCard extends HTMLElement {
             autoPanPaddingTopLeft: [12, 72],
             autoPanPaddingBottomRight: [12, 12],
           })
+          .on("click", () => setTimeout(() => this._resolvePopupPhoto(marker.getPopup()), 0))
           .on("popupopen", (e) => this._resolvePopupPhoto(e.popup || marker.getPopup()))
           .addTo(this._map);
         this._markers.set(key, marker);
