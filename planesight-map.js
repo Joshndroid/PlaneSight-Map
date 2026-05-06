@@ -200,8 +200,8 @@ class PlaneSightMapCard extends HTMLElement {
     this._leafletCssInjected = false;
     this._visibilityHandler = () => this._recoverMap();
     this._windowResizeHandler = () => this._recoverMap();
-    this._photoCache   = new Map();   // hex → photo URL or null
-    this._photoPromises = new Map();   // hex → in-flight planespotters lookup
+    this._photoCache   = new Map();   // lookup key → photo URL or null
+    this._photoPromises = new Map();   // lookup key → in-flight planespotters lookup
     this._activePopup   = null;
     this._popupCloseResetTimer = null;
   }
@@ -481,7 +481,7 @@ class PlaneSightMapCard extends HTMLElement {
     // Use rAF so Leaflet has finished injecting the popup content into DOM.
     requestAnimationFrame(() => {
       const container = popup?.getElement?.();
-      const photoDiv  = container?.querySelector(".pop-photo[data-hex]");
+      const photoDiv  = container?.querySelector(".pop-photo[data-photo-key]");
       if (!photoDiv) {
         if (attempt < 12) {
           setTimeout(() => this._resolvePopupPhoto(popup, attempt + 1), 50);
@@ -490,48 +490,75 @@ class PlaneSightMapCard extends HTMLElement {
       }
       if (photoDiv.dataset.photoSrc) return;
 
-      // Strip tar1090 synthetic-address prefix (~) and normalise to uppercase.
-      const rawHex = photoDiv.dataset.hex || "";
-      const hex    = rawHex.replace(/^~/, "").toUpperCase();
-
-      // Must look like a real ICAO address (6 hex digits).
-      if (!/^[0-9A-F]{6}$/.test(hex)) {
+      const identity = this._photoIdentityFromDataset(photoDiv.dataset);
+      if (!identity) {
         photoDiv.remove();
         this._updatePopupLayout(popup);
         return;
       }
 
-      this._loadPhoto(hex).then((result) => {
-        this._applyPhotoToPopup(popup, hex, result);
+      this._loadPhoto(identity).then((result) => {
+        this._applyPhotoToPopup(popup, identity.key, result);
       });
     });
   }
 
   _loadMarkerPhoto(marker, ac) {
-    const hex = this._photoHex(ac);
-    if (!hex) return;
-    this._loadPhoto(hex).then((result) => {
-      this._applyPhotoToPopup(marker.getPopup(), hex, result);
+    const identity = this._photoIdentity(ac);
+    if (!identity) return;
+    this._loadPhoto(identity).then((result) => {
+      this._applyPhotoToPopup(marker.getPopup(), identity.key, result);
     });
   }
 
-  _photoHex(ac) {
+  _photoIdentity(ac) {
     const rawHex = ac?.hex || "";
     const hex = rawHex.replace(/^~/, "").toUpperCase();
-    return /^[0-9A-F]{6}$/.test(hex) ? hex : "";
+    const reg = String(ac?.r || ac?.registration || "").trim().toUpperCase();
+    const type = String(ac?.t || ac?.aircraft_type || ac?.aircraftType || "").trim().toUpperCase();
+    const validHex = /^[0-9A-F]{6}$/.test(hex) ? hex : "";
+    const cleanReg = /^[A-Z0-9-]+$/.test(reg) ? reg : "";
+    const cleanType = /^[A-Z0-9-]+$/.test(type) ? type : "";
+
+    if (!validHex && !cleanReg) return null;
+    return {
+      key: `${cleanReg || "-"}|${validHex || "-"}|${cleanType || "-"}`,
+      hex: validHex,
+      reg: cleanReg,
+      type: cleanType,
+    };
+  }
+
+  _photoIdentityFromDataset(dataset) {
+    const rawHex = dataset.hex || "";
+    const hex = rawHex.replace(/^~/, "").toUpperCase();
+    const reg = String(dataset.reg || "").trim().toUpperCase();
+    const type = String(dataset.aircraftType || "").trim().toUpperCase();
+    const validHex = /^[0-9A-F]{6}$/.test(hex) ? hex : "";
+    const cleanReg = /^[A-Z0-9-]+$/.test(reg) ? reg : "";
+    const cleanType = /^[A-Z0-9-]+$/.test(type) ? type : "";
+
+    if (!validHex && !cleanReg) return null;
+    return {
+      key: dataset.photoKey || `${cleanReg || "-"}|${validHex || "-"}|${cleanType || "-"}`,
+      hex: validHex,
+      reg: cleanReg,
+      type: cleanType,
+    };
   }
 
   _photoHtml(ac) {
-    const rawHex = ac?.hex || "";
-    const hex = rawHex.replace(/^~/, "").toUpperCase();
-    const escapedHex = this._escapeHtml(rawHex);
-    const result = /^[0-9A-F]{6}$/.test(hex) && this._photoCache.has(hex)
-      ? this._photoCache.get(hex)
+    const identity = this._photoIdentity(ac);
+    if (!identity) return "";
+
+    const result = this._photoCache.has(identity.key)
+      ? this._photoCache.get(identity.key)
       : undefined;
+    const attrs = this._photoDataAttrs(identity);
 
     if (result && result.src) {
       return `
-        <div class="pop-photo has-photo" data-hex="${escapedHex}" data-photo-src="${this._escapeHtml(result.src)}">
+        <div class="pop-photo has-photo" ${attrs} data-photo-src="${this._escapeHtml(result.src)}">
           <a class="pop-photo-link" href="${this._escapeHtml(result.link || "#")}" target="_blank" rel="noopener noreferrer">
             <img class="pop-photo-img" src="${this._escapeHtml(result.src)}" alt="Aircraft photo" decoding="async">
           </a>
@@ -542,9 +569,18 @@ class PlaneSightMapCard extends HTMLElement {
     if (result === null) return "";
 
     return `
-        <div class="pop-photo is-loading" data-hex="${escapedHex}">
+        <div class="pop-photo is-loading" ${attrs}>
           <div class="pop-photo-loading">Loading photo…</div>
         </div>`;
+  }
+
+  _photoDataAttrs(identity) {
+    return [
+      `data-photo-key="${this._escapeHtml(identity.key)}"`,
+      `data-hex="${this._escapeHtml(identity.hex || "")}"`,
+      `data-reg="${this._escapeHtml(identity.reg || "")}"`,
+      `data-aircraft-type="${this._escapeHtml(identity.type || "")}"`,
+    ].join(" ");
   }
 
   _escapeHtml(value) {
@@ -556,31 +592,73 @@ class PlaneSightMapCard extends HTMLElement {
       .replace(/'/g, "&#39;");
   }
 
-  _applyPhotoToPopup(popup, hex, result, attempt = 0) {
+  _applyPhotoToPopup(popup, photoKey, result, attempt = 0) {
     const container = popup?.getElement?.();
-    const photoDiv = container?.querySelector(".pop-photo[data-hex]");
+    const photoDiv = container?.querySelector(".pop-photo[data-photo-key]");
     if (!photoDiv) {
       if (attempt < 12) {
-        setTimeout(() => this._applyPhotoToPopup(popup, hex, result, attempt + 1), 50);
+        setTimeout(() => this._applyPhotoToPopup(popup, photoKey, result, attempt + 1), 50);
       }
       return;
     }
-    this._applyPhoto(photoDiv, result, popup, hex);
+    this._applyPhoto(photoDiv, result, popup, photoKey);
   }
 
-  _loadPhoto(hex) {
-    if (this._photoCache.has(hex)) {
-      return Promise.resolve(this._photoCache.get(hex));
+  _loadPhoto(identity) {
+    if (this._photoCache.has(identity.key)) {
+      return Promise.resolve(this._photoCache.get(identity.key));
     }
-    if (this._photoPromises.has(hex)) {
-      return this._photoPromises.get(hex);
+    if (this._photoPromises.has(identity.key)) {
+      return this._photoPromises.get(identity.key);
     }
 
     const controller = typeof AbortController !== "undefined"
       ? new AbortController()
       : null;
 
-    const fetchPromise = fetch(`https://api.planespotters.net/pub/photos/hex/${hex}`, {
+    const fetchPromise = this._fetchBestPhoto(identity, controller);
+
+    const timeoutPromise = new Promise((resolve) => {
+      setTimeout(() => {
+        if (controller) controller.abort();
+        resolve(null);
+      }, 8000);
+    });
+
+    const promise = Promise.race([fetchPromise, timeoutPromise])
+      .catch(() => null)
+      .then((result) => {
+        this._photoCache.set(identity.key, result);
+        this._photoPromises.delete(identity.key);
+        return result;
+      });
+
+    this._photoPromises.set(identity.key, promise);
+    return promise;
+  }
+
+  async _fetchBestPhoto(identity, controller) {
+    const urls = [];
+    if (identity.reg) {
+      urls.push(`https://api.planespotters.net/pub/photos/reg/${encodeURIComponent(identity.reg)}`);
+    }
+    if (identity.hex) {
+      const params = new URLSearchParams();
+      if (identity.reg) params.set("reg", identity.reg);
+      if (identity.type) params.set("icaoType", identity.type);
+      const query = params.toString();
+      urls.push(`https://api.planespotters.net/pub/photos/hex/${encodeURIComponent(identity.hex)}${query ? `?${query}` : ""}`);
+    }
+
+    for (const url of urls) {
+      const result = await this._fetchPhotoUrl(url, controller);
+      if (result) return result;
+    }
+    return null;
+  }
+
+  _fetchPhotoUrl(url, controller) {
+    return fetch(url, {
         signal: controller ? controller.signal : undefined,
       })
       .then((r) => r.ok ? r.json() : null)
@@ -594,31 +672,13 @@ class PlaneSightMapCard extends HTMLElement {
             }
           : null;
       });
-
-    const timeoutPromise = new Promise((resolve) => {
-      setTimeout(() => {
-        if (controller) controller.abort();
-        resolve(null);
-      }, 8000);
-    });
-
-    const promise = Promise.race([fetchPromise, timeoutPromise])
-      .catch(() => null)
-      .then((result) => {
-        this._photoCache.set(hex, result);
-        this._photoPromises.delete(hex);
-        return result;
-      });
-
-    this._photoPromises.set(hex, promise);
-    return promise;
   }
 
-  _applyPhoto(photoDiv, result, popup, expectedHex = null) {
+  _applyPhoto(photoDiv, result, popup, expectedPhotoKey = null) {
     if (!photoDiv) return;
-    if (expectedHex) {
-      const currentHex = (photoDiv.dataset.hex || "").replace(/^~/, "").toUpperCase();
-      if (currentHex !== expectedHex) return;
+    if (expectedPhotoKey) {
+      const currentPhotoKey = photoDiv.dataset.photoKey || "";
+      if (currentPhotoKey !== expectedPhotoKey) return;
     }
     if (!result || !result.src) {
       photoDiv.remove();
@@ -635,12 +695,15 @@ class PlaneSightMapCard extends HTMLElement {
     img.decoding = "async";
 
     const showLoadedPhoto = () => {
-      const currentHex = (photoDiv.dataset.hex || "").replace(/^~/, "").toUpperCase();
-      if (expectedHex && currentHex !== expectedHex) return;
+      const currentPhotoKey = photoDiv.dataset.photoKey || "";
+      if (expectedPhotoKey && currentPhotoKey !== expectedPhotoKey) return;
 
       const frame = document.createElement("div");
       frame.className = "pop-photo has-photo";
       frame.dataset.hex = photoDiv.dataset.hex || "";
+      frame.dataset.reg = photoDiv.dataset.reg || "";
+      frame.dataset.aircraftType = photoDiv.dataset.aircraftType || "";
+      frame.dataset.photoKey = photoDiv.dataset.photoKey || "";
       frame.dataset.photoSrc = result.src;
 
       const link = document.createElement("a");
@@ -685,7 +748,7 @@ class PlaneSightMapCard extends HTMLElement {
     }
 
     const rootClone = root.cloneNode(true);
-    const oldPhoto = rootClone.querySelector(".pop-photo[data-hex]");
+    const oldPhoto = rootClone.querySelector(".pop-photo[data-photo-key]");
     if (oldPhoto) oldPhoto.replaceWith(replacement.cloneNode(true));
     popup.setContent(rootClone.outerHTML);
     this._panPopupAfterContentChange(popup);
