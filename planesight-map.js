@@ -71,9 +71,20 @@ const FEET_TO_METRES = 0.3048;
 const KNOTS_TO_KMH   = 1.852;
 const NM_TO_KM       = 1.852;
 const DISTANCE_FIELDS = ["distance_nm", "distance", "dist", "dst", "r_dst"];
-const GENERIC_TYPE_PHOTO_REGISTRATIONS = {
-  BE58: "N758CA", // Beechcraft 58 Baron
-  B58T: "N58TK",  // Beechcraft 58TC Baron
+const PHOTO_CACHE_VERSION = "v3";
+const GENERIC_TYPE_PHOTOS = {
+  BE58: {
+    reg: "N758CA",
+    src: "https://t.plnspttrs.net/36686/1904216_d9a8d43d8b_280.jpg",
+    link: "https://www.planespotters.net/photo/1904216/n758ca-fenix-air-charter-beechcraft-58-baron?utm_source=api",
+    credit: "Tran Nguyen An Binh",
+  },
+  B58T: {
+    reg: "N58TK",
+    src: "https://t.plnspttrs.net/42321/1912250_9855f166c6_280.jpg",
+    link: "https://www.planespotters.net/photo/1912250/n58tk-private-beechcraft-58tc-baron?utm_source=api",
+    credit: "NS_Aviation",
+  },
 };
 
 function haversineNm(lat1, lon1, lat2, lon2) {
@@ -524,9 +535,9 @@ class PlaneSightMapCard extends HTMLElement {
     const cleanReg = /^[A-Z0-9-]+$/.test(reg) ? reg : "";
     const cleanType = /^[A-Z0-9-]+$/.test(type) ? type : "";
 
-    if (!validHex && !cleanReg) return null;
+    if (!validHex && !cleanReg && !GENERIC_TYPE_PHOTOS[cleanType]) return null;
     return {
-      key: `${cleanReg || "-"}|${validHex || "-"}|${cleanType || "-"}`,
+      key: `${PHOTO_CACHE_VERSION}|${cleanReg || "-"}|${validHex || "-"}|${cleanType || "-"}`,
       hex: validHex,
       reg: cleanReg,
       type: cleanType,
@@ -542,9 +553,9 @@ class PlaneSightMapCard extends HTMLElement {
     const cleanReg = /^[A-Z0-9-]+$/.test(reg) ? reg : "";
     const cleanType = /^[A-Z0-9-]+$/.test(type) ? type : "";
 
-    if (!validHex && !cleanReg) return null;
+    if (!validHex && !cleanReg && !GENERIC_TYPE_PHOTOS[cleanType]) return null;
     return {
-      key: dataset.photoKey || `${cleanReg || "-"}|${validHex || "-"}|${cleanType || "-"}`,
+      key: dataset.photoKey || `${PHOTO_CACHE_VERSION}|${cleanReg || "-"}|${validHex || "-"}|${cleanType || "-"}`,
       hex: validHex,
       reg: cleanReg,
       type: cleanType,
@@ -657,10 +668,10 @@ class PlaneSightMapCard extends HTMLElement {
         url: `https://api.planespotters.net/pub/photos/hex/${encodeURIComponent(identity.hex)}${query ? `?${query}` : ""}`,
       });
     }
-    const genericReg = GENERIC_TYPE_PHOTO_REGISTRATIONS[identity.type];
-    if (genericReg && genericReg !== identity.reg) {
+    const genericPhoto = GENERIC_TYPE_PHOTOS[identity.type];
+    if (genericPhoto?.reg && genericPhoto.reg !== identity.reg) {
       urls.push({
-        url: `https://api.planespotters.net/pub/photos/reg/${encodeURIComponent(genericReg)}`,
+        url: `https://api.planespotters.net/pub/photos/reg/${encodeURIComponent(genericPhoto.reg)}`,
         genericType: identity.type,
       });
     }
@@ -670,7 +681,14 @@ class PlaneSightMapCard extends HTMLElement {
       if (result && request.genericType) result.genericType = request.genericType;
       if (result) return result;
     }
-    return null;
+    return genericPhoto
+      ? {
+          src: genericPhoto.src,
+          link: genericPhoto.link,
+          credit: genericPhoto.credit,
+          genericType: identity.type,
+        }
+      : null;
   }
 
   _fetchPhotoUrl(url, controller) {
