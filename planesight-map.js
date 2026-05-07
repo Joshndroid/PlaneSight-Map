@@ -154,31 +154,45 @@ function altColor(alt) {
 }
 
 function aircraftIconKind(ac) {
-  const type = String(ac?.t || ac?.aircraft_type || ac?.aircraftType || "").trim().toUpperCase();
-  if (!type) return "airliner";
+  const type     = String(ac?.t || ac?.aircraft_type || ac?.aircraftType || "").trim().toUpperCase();
+  const category = String(ac?.category || "").trim().toUpperCase();
 
-  if (
-    type.startsWith("H") ||
-    /^(R22|R44|R66|B06|B407|EC\d|AS\d|A139|A169|S76|S92|UH|CH|HH|MH)/.test(type)
-  ) {
-    return "helicopter";
+  // ── ADS-B emitter category A7 = Rotorcraft (broadcast by the aircraft itself,
+  //    far more reliable than a DB type-code lookup when the type field is missing) ──
+  if (category === "A7") return "helicopter";
+
+  // ── Type-code classification ──────────────────────────────────────────────
+  if (type) {
+    // Helicopters — explicit type-code patterns only (avoid broad startsWith("H")
+    // which incorrectly matches H25B / Hawker business jets)
+    if (
+      /^(R22|R44|R66|B06|B407|EC\d|AS[23456]\d|A139|A169|S76|S92|UH\d|CH\d|HH\d|MH\d|BK1|BO1|NH9|S61|S64|S65|S70|H1[23456789]|H[3678]\d)/.test(type)
+    ) {
+      return "helicopter";
+    }
+
+    if (
+      /^(BE58|B58T|BE55|BE56|BE60|BE76|P68|PA23|PA30|PA31|PA34|PA44|DA42|DA62|C310|C340|C402|C404|C414|C421|AEST|BN2|AC50|DHC6)/.test(type)
+    ) {
+      return "twin-prop";
+    }
+
+    if (
+      /^(C1|C2|C3|C4|C5|C6|C7|C8|C9|P28|PA18|PA20|PA22|PA24|PA25|PA28|PA32|PA46|BE3|BE35|BE36|SR2|DA20|DA40|DV20|DR40|JAB|J160|J170|J230|P208|PC12|TBM|M20|M7|RV|S22T|COL|GLST)/.test(type)
+    ) {
+      return "single-prop";
+    }
+
+    if (/^(A3|A2|A1|B7|B3M|E1|E2|CRJ|CL6|GLF|C25|C5[1256]|LJ|FA|F2TH|F900|H25B|PC24|SF50)/.test(type)) {
+      return "jet";
+    }
   }
 
-  if (
-    /^(BE58|B58T|BE55|BE56|BE60|BE76|P68|PA23|PA30|PA31|PA34|PA44|DA42|DA62|C310|C340|C402|C404|C414|C421|AEST|BN2|AC50|DHC6)/.test(type)
-  ) {
-    return "twin-prop";
-  }
-
-  if (
-    /^(C1|C2|C3|C4|C5|C6|C7|C8|C9|P28|PA18|PA20|PA22|PA24|PA25|PA28|PA32|PA46|BE3|BE35|BE36|SR2|DA20|DA40|DV20|DR40|JAB|J160|J170|J230|P208|PC12|TBM|M20|M7|RV|S22T|COL|GLST)/.test(type)
-  ) {
-    return "single-prop";
-  }
-
-  if (/^(A3|A2|A1|B7|B3M|E1|E2|CRJ|CL6|GLF|C25|C5[1256]|LJ|FA|F2TH|F900|H25B|PC24|SF50)/.test(type)) {
-    return "jet";
-  }
+  // ── ADS-B emitter category fallbacks (used when the type code is absent) ──
+  //    A1 = Light (< 15,500 lbs), A2 = Small (15,500–75,500 lbs)
+  //    B1 = Glider / sailplane, B4 = Ultralight
+  if (category === "A1" || category === "A2") return "single-prop";
+  if (category === "B1" || category === "B4") return "single-prop";
 
   return "airliner";
 }
