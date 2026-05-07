@@ -72,7 +72,7 @@ const KNOTS_TO_KMH   = 1.852;
 const NM_TO_KM       = 1.852;
 const DISTANCE_FIELDS = ["distance_nm", "distance", "dist", "dst", "r_dst"];
 const PHOTO_CACHE_VERSION = "v3";
-const GENERIC_TYPE_PHOTOS = {
+const DEFAULT_GENERIC_TYPE_PHOTOS = {
   BE58: {
     reg: "N758CA",
     src: "https://t.plnspttrs.net/36686/1904216_d9a8d43d8b_280.jpg",
@@ -153,9 +153,75 @@ function altColor(alt) {
   return "#c084fc";                     // violet
 }
 
-/** Top-down airplane SVG path (nose pointing up / north at 0°). */
-function planeSvg(color, heading, size = 22) {
+function aircraftIconKind(ac) {
+  const type = String(ac?.t || ac?.aircraft_type || ac?.aircraftType || "").trim().toUpperCase();
+  if (!type) return "airliner";
+
+  if (
+    type.startsWith("H") ||
+    /^(R22|R44|R66|B06|B407|EC\d|AS\d|A139|A169|S76|S92|UH|CH|HH|MH)/.test(type)
+  ) {
+    return "helicopter";
+  }
+
+  if (
+    /^(BE58|B58T|BE55|BE56|BE60|BE76|P68|PA23|PA30|PA31|PA34|PA44|DA42|DA62|C310|C340|C402|C404|C414|C421|AEST|BN2|AC50|DHC6)/.test(type)
+  ) {
+    return "twin-prop";
+  }
+
+  if (
+    /^(C1|C2|C3|C4|C5|C6|C7|C8|C9|P28|PA18|PA20|PA22|PA24|PA25|PA28|PA32|PA46|BE3|BE35|BE36|SR2|DA20|DA40|DV20|DR40|JAB|J160|J170|J230|P208|PC12|TBM|M20|M7|RV|S22T|COL|GLST)/.test(type)
+  ) {
+    return "single-prop";
+  }
+
+  if (/^(A3|A2|A1|B7|B3M|E1|E2|CRJ|CL6|GLF|C25|C5[1256]|LJ|FA|F2TH|F900|H25B|PC24|SF50)/.test(type)) {
+    return "jet";
+  }
+
+  return "airliner";
+}
+
+function aircraftIconPath(kind, color) {
+  switch (kind) {
+    case "single-prop":
+      return `
+        <circle cx="12" cy="3.3" r="1.5" fill="${color}"/>
+        <ellipse cx="12" cy="11.8" rx="1.45" ry="7.2" fill="${color}"/>
+        <polygon points="12,10 4,15.8 4,17.2 12,14.2 20,17.2 20,15.8" fill="${color}"/>
+        <polygon points="12,18.2 7.5,20.8 7.5,21.8 12,20.4 16.5,21.8 16.5,20.8" fill="${color}"/>`;
+    case "twin-prop":
+      return `
+        <ellipse cx="12" cy="11.4" rx="1.55" ry="7.4" fill="${color}"/>
+        <polygon points="12,9.8 2.4,15.6 2.4,17.1 12,14.4 21.6,17.1 21.6,15.6" fill="${color}"/>
+        <circle cx="6.2" cy="15.4" r="1.15" fill="${color}"/>
+        <circle cx="17.8" cy="15.4" r="1.15" fill="${color}"/>
+        <polygon points="12,18.2 7,20.8 7,21.8 12,20.4 17,21.8 17,20.8" fill="${color}"/>`;
+    case "helicopter":
+      return `
+        <rect x="10.6" y="7.5" width="2.8" height="9.2" rx="1.4" fill="${color}"/>
+        <rect x="3" y="10.8" width="18" height="1.5" rx="0.75" fill="${color}"/>
+        <rect x="11.3" y="2.8" width="1.4" height="17.6" rx="0.7" fill="${color}" opacity="0.9"/>
+        <polygon points="12,16 8.6,21.2 15.4,21.2" fill="${color}"/>
+        <circle cx="12" cy="11.6" r="1.2" fill="${color}"/>`;
+    case "jet":
+      return `
+        <ellipse cx="12" cy="10.8" rx="1.6" ry="7.9" fill="${color}"/>
+        <polygon points="12,9.3 1.8,16.7 1.8,18.3 12,14.7 22.2,18.3 22.2,16.7" fill="${color}"/>
+        <polygon points="12,18.5 6.7,21 6.7,22 12,20.5 17.3,22 17.3,21" fill="${color}"/>`;
+    default:
+      return `
+        <ellipse cx="12" cy="11" rx="1.6" ry="7.5" fill="${color}"/>
+        <polygon points="12,10 2,16.5 2,18 12,14.5 22,18 22,16.5" fill="${color}"/>
+        <polygon points="12,18.5 7,21 7,22 12,20.5 17,22 17,21" fill="${color}"/>`;
+  }
+}
+
+/** Top-down aircraft SVG path (nose pointing up / north at 0°). */
+function planeSvg(color, heading, size = 22, ac = null) {
   // We rotate the wrapping div rather than the SVG path so the hit-box stays square.
+  const kind = aircraftIconKind(ac);
   return `
     <div style="
       width:${size}px;height:${size}px;
@@ -163,12 +229,7 @@ function planeSvg(color, heading, size = 22) {
       filter:drop-shadow(0 0 3px rgba(0,0,0,0.9)) drop-shadow(0 1px 2px rgba(0,0,0,0.7));
     ">
       <svg viewBox="0 0 24 24" width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">
-        <!-- fuselage -->
-        <ellipse cx="12" cy="11" rx="1.6" ry="7.5" fill="${color}"/>
-        <!-- wings -->
-        <polygon points="12,10 2,16.5 2,18 12,14.5 22,18 22,16.5" fill="${color}"/>
-        <!-- horizontal stabiliser -->
-        <polygon points="12,18.5 7,21 7,22 12,20.5 17,22 17,21" fill="${color}"/>
+        ${aircraftIconPath(kind, color)}
       </svg>
     </div>`;
 }
@@ -503,7 +564,7 @@ class PlaneSightMapCard extends HTMLElement {
         }
         return;
       }
-      if (photoDiv.dataset.photoSrc) return;
+    if (photoDiv.dataset.photoSrc && photoDiv.dataset.photoGeneric !== "true") return;
 
       const identity = this._photoIdentityFromDataset(photoDiv.dataset);
       if (!identity) {
@@ -535,7 +596,7 @@ class PlaneSightMapCard extends HTMLElement {
     const cleanReg = /^[A-Z0-9-]+$/.test(reg) ? reg : "";
     const cleanType = /^[A-Z0-9-]+$/.test(type) ? type : "";
 
-    if (!validHex && !cleanReg && !GENERIC_TYPE_PHOTOS[cleanType]) return null;
+    if (!validHex && !cleanReg && !this._genericTypePhoto(cleanType)) return null;
     return {
       key: `${PHOTO_CACHE_VERSION}|${cleanReg || "-"}|${validHex || "-"}|${cleanType || "-"}`,
       hex: validHex,
@@ -553,7 +614,7 @@ class PlaneSightMapCard extends HTMLElement {
     const cleanReg = /^[A-Z0-9-]+$/.test(reg) ? reg : "";
     const cleanType = /^[A-Z0-9-]+$/.test(type) ? type : "";
 
-    if (!validHex && !cleanReg && !GENERIC_TYPE_PHOTOS[cleanType]) return null;
+    if (!validHex && !cleanReg && !this._genericTypePhoto(cleanType)) return null;
     return {
       key: dataset.photoKey || `${PHOTO_CACHE_VERSION}|${cleanReg || "-"}|${validHex || "-"}|${cleanType || "-"}`,
       hex: validHex,
@@ -569,15 +630,17 @@ class PlaneSightMapCard extends HTMLElement {
     const result = this._photoCache.has(identity.key)
       ? this._photoCache.get(identity.key)
       : undefined;
+    const fallback = this._genericTypePhotoResult(identity);
+    const displayResult = result || fallback;
     const attrs = this._photoDataAttrs(identity);
 
-    if (result && result.src) {
+    if (displayResult && displayResult.src) {
       return `
-        <div class="pop-photo has-photo" ${attrs} data-photo-src="${this._escapeHtml(result.src)}">
-          <a class="pop-photo-link" href="${this._escapeHtml(result.link || "#")}" target="_blank" rel="noopener noreferrer">
-            <img class="pop-photo-img" src="${this._escapeHtml(result.src)}" alt="Aircraft photo" decoding="async">
+        <div class="pop-photo has-photo" ${attrs} data-photo-src="${this._escapeHtml(displayResult.src)}"${displayResult.genericType ? ' data-photo-generic="true"' : ""}>
+          <a class="pop-photo-link" href="${this._escapeHtml(displayResult.link || "#")}" target="_blank" rel="noopener noreferrer">
+            <img class="pop-photo-img" src="${this._escapeHtml(displayResult.src)}" alt="Aircraft photo" decoding="async">
           </a>
-          <div class="pop-photo-credit">${this._escapeHtml(this._photoCredit(result))}</div>
+          <div class="pop-photo-credit">${this._escapeHtml(this._photoCredit(displayResult))}</div>
         </div>`;
     }
 
@@ -636,7 +699,7 @@ class PlaneSightMapCard extends HTMLElement {
     const timeoutPromise = new Promise((resolve) => {
       setTimeout(() => {
         if (controller) controller.abort();
-        resolve(null);
+        resolve(this._genericTypePhotoResult(identity));
       }, 8000);
     });
 
@@ -668,7 +731,7 @@ class PlaneSightMapCard extends HTMLElement {
         url: `https://api.planespotters.net/pub/photos/hex/${encodeURIComponent(identity.hex)}${query ? `?${query}` : ""}`,
       });
     }
-    const genericPhoto = GENERIC_TYPE_PHOTOS[identity.type];
+    const genericPhoto = this._genericTypePhoto(identity.type);
     if (genericPhoto?.reg && genericPhoto.reg !== identity.reg) {
       urls.push({
         url: `https://api.planespotters.net/pub/photos/reg/${encodeURIComponent(genericPhoto.reg)}`,
@@ -706,6 +769,41 @@ class PlaneSightMapCard extends HTMLElement {
             }
           : null;
       });
+  }
+
+  _genericTypePhotoResult(identity) {
+    const genericPhoto = this._genericTypePhoto(identity?.type);
+    return genericPhoto?.src
+      ? {
+          src: genericPhoto.src,
+          link: genericPhoto.link,
+          credit: genericPhoto.credit,
+          genericType: identity.type,
+        }
+      : null;
+  }
+
+  _genericTypePhoto(type) {
+    const cleanType = String(type || "").trim().toUpperCase();
+    if (!cleanType) return null;
+
+    const configured = this._config?.generic_type_photos?.[cleanType];
+    const fallback = configured ?? DEFAULT_GENERIC_TYPE_PHOTOS[cleanType];
+    if (!fallback) return null;
+
+    if (typeof fallback === "string") {
+      const reg = fallback.trim().toUpperCase();
+      return reg ? { reg } : null;
+    }
+
+    if (typeof fallback !== "object") return null;
+    const reg = String(fallback.reg || "").trim().toUpperCase();
+    const src = String(fallback.src || "").trim();
+    const link = String(fallback.link || "").trim();
+    const credit = String(fallback.credit || "").trim();
+
+    if (!reg && !src) return null;
+    return { reg, src, link, credit };
   }
 
   _photoCredit(result) {
@@ -746,6 +844,7 @@ class PlaneSightMapCard extends HTMLElement {
       frame.dataset.aircraftType = photoDiv.dataset.aircraftType || "";
       frame.dataset.photoKey = photoDiv.dataset.photoKey || "";
       frame.dataset.photoSrc = result.src;
+      if (result.genericType) frame.dataset.photoGeneric = "true";
 
       const link = document.createElement("a");
       link.className = "pop-photo-link";
@@ -1071,7 +1170,7 @@ class PlaneSightMapCard extends HTMLElement {
       const size  = 22;
 
       const icon = window.L.divIcon({
-        html:       planeSvg(color, ac.track, size),
+        html:       planeSvg(color, ac.track, size, ac),
         className:  "plane-marker",
         iconSize:   [size, size],
         iconAnchor: [size / 2, size / 2],
