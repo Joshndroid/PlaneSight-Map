@@ -155,44 +155,61 @@ function altColor(alt) {
 
 function aircraftIconKind(ac) {
   const type     = String(ac?.t || ac?.aircraft_type || ac?.aircraftType || "").trim().toUpperCase();
+  const desc     = String(ac?.desc || "").trim().toUpperCase();
   const category = String(ac?.category || "").trim().toUpperCase();
 
-  // ── ADS-B emitter category A7 = Rotorcraft (broadcast by the aircraft itself,
-  //    far more reliable than a DB type-code lookup when the type field is missing) ──
-  if (category === "A7") return "helicopter";
+  // ── Priority 1: ICAO type description (from readsb/dump1090 DB) ──────────
+  // Format: [class][engine-count][engine-type]
+  //   class:       L=Landplane  S=Seaplane  A=Amphibian  H=Helicopter  G=Gyroplane
+  //   engine-type: P=Piston     T=Turboprop J=Jet        E=Electric
+  // e.g. "L2P" = Cessna 310 (landplane, 2 piston engines)
+  //      "L1P" = Cessna 172  (landplane, 1 piston engine)
+  //      "H1T" = Robinson R44 (helicopter, 1 turbine)
+  //      "L2J" = business jet or airliner
+  if (desc.length >= 3) {
+    const cls     = desc.charAt(0);
+    const engines = desc.charAt(1);
+    const engType = desc.charAt(2);
 
-  // ── Type-code classification ──────────────────────────────────────────────
-  if (type) {
-    // Helicopters — explicit type-code patterns only (avoid broad startsWith("H")
-    // which incorrectly matches H25B / Hawker business jets)
-    if (
-      /^(R22|R44|R66|B06|B407|EC\d|AS[23456]\d|A139|A169|S76|S92|UH\d|CH\d|HH\d|MH\d|BK1|BO1|NH9|S61|S64|S65|S70|H1[23456789]|H[3678]\d)/.test(type)
-    ) {
-      return "helicopter";
+    if (cls === "H" || cls === "G") return "helicopter";
+
+    if (engType === "P" || engType === "T") {
+      return engines === "1" ? "single-prop" : "twin-prop";
     }
-
-    if (
-      /^(BE58|B58T|BE55|BE56|BE60|BE76|P68|PA23|PA30|PA31|PA34|PA44|DA42|DA62|C310|C340|C402|C404|C414|C421|AEST|BN2|AC50|DHC6)/.test(type)
-    ) {
-      return "twin-prop";
-    }
-
-    if (
-      /^(C1|C2|C3|C4|C5|C6|C7|C8|C9|P28|PA18|PA20|PA22|PA24|PA25|PA28|PA32|PA46|BE3|BE35|BE36|SR2|DA20|DA40|DV20|DR40|JAB|J160|J170|J230|P208|PC12|TBM|M20|M7|RV|S22T|COL|GLST)/.test(type)
-    ) {
-      return "single-prop";
-    }
-
-    if (/^(A3|A2|A1|B7|B3M|E1|E2|CRJ|CL6|GLF|C25|C5[1256]|LJ|FA|F2TH|F900|H25B|PC24|SF50)/.test(type)) {
+    if (engType === "J" || engType === "E") {
       return "jet";
     }
   }
+  // Single-char desc "H" also means helicopter
+  if (desc === "H" || desc === "G") return "helicopter";
 
-  // ── ADS-B emitter category fallbacks (used when the type code is absent) ──
-  //    A1 = Light (< 15,500 lbs), A2 = Small (15,500–75,500 lbs)
-  //    B1 = Glider / sailplane, B4 = Ultralight
-  if (category === "A1" || category === "A2") return "single-prop";
-  if (category === "B1" || category === "B4") return "single-prop";
+  // ── Priority 2: Exact type-code lookup ───────────────────────────────────
+  if (type) {
+    // Helicopters
+    if (/^(R22|R44|R66|S76|S92|S61|H60|NH90|H64|H47|H46|AS3[2B]|PUMA|TIGR|MI24|A139|A169|A149|A189|EC25|EC55|EC75|EH10|H160|H53|H53S|GAZL|AS50|AS55|ALO[23]|AS65|BK11[57]|BO10[45]|GYRO)/.test(type))
+      return "helicopter";
+
+    // Twin-prop
+    if (/^(C310|C31T|C320|C335|C336|C337|C340|C401|C402|C404|C411|C414|C421|C425|C441|BE55|BE56|BE58|BE60|B58T|BE76|P68|PA23|PA27|PA30|PA31|PA34|PA39|PA44|DA42|DA62|BN2|DHC6|AC50|AEST)/.test(type))
+      return "twin-prop";
+
+    // Business / small jets
+    if (/^(C25[ABC]|C501|C510|C525|C550|C560|C56X|C650|C680|C68A|C750|LJ[2-9]\d|LR[34]\d|H25[ABC]|ASTR|G150|GLF[2-6]|GL[5-7]T|GLEX|GA[5-8]C|FA[12567]0|FA[678]X|F2TH|F900|CRJ[129]|CRJX|SF50|PRM1|E[34]5[LP]|E50P|EA50|PC24|BE40)/.test(type))
+      return "jet";
+
+    // Single-prop
+    if (/^(C1[5-9]\d|C2[0-9]\d|PA1[6-9]|PA20|PA22|PA24|PA25|PA28|PA32|PA46|BE23|BE35|BE36|SR2[02]|S22T|DA20|DA40|DV20|DR[34]\d|PC12|PC6|TBM[789]|TBM9|M20|M7[ABCPRT]|RV[0-9]|VEZE|VELO|PA24)/.test(type))
+      return "single-prop";
+  }
+
+  // ── Priority 3: ADS-B emitter category (broadcast by aircraft) ───────────
+  // Mirrors tar1090 CategoryIcons
+  if (category === "A7") return "helicopter";
+  if (category === "A6") return "jet";          // high-performance
+  if (category === "A1") return "single-prop";  // light < 7t
+  if (category === "B1") return "single-prop";  // glider
+  if (category === "B4") return "single-prop";  // ultralight
+  if (category === "B6") return "jet";          // UAV
 
   return "airliner";
 }
