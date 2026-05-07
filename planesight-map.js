@@ -71,6 +71,10 @@ const FEET_TO_METRES = 0.3048;
 const KNOTS_TO_KMH   = 1.852;
 const NM_TO_KM       = 1.852;
 const DISTANCE_FIELDS = ["distance_nm", "distance", "dist", "dst", "r_dst"];
+const GENERIC_TYPE_PHOTO_REGISTRATIONS = {
+  BE58: "N758CA", // Beechcraft 58 Baron
+  B58T: "N58TK",  // Beechcraft 58TC Baron
+};
 
 function haversineNm(lat1, lon1, lat2, lon2) {
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -562,7 +566,7 @@ class PlaneSightMapCard extends HTMLElement {
           <a class="pop-photo-link" href="${this._escapeHtml(result.link || "#")}" target="_blank" rel="noopener noreferrer">
             <img class="pop-photo-img" src="${this._escapeHtml(result.src)}" alt="Aircraft photo" decoding="async">
           </a>
-          <div class="pop-photo-credit">${this._escapeHtml(result.credit || "planespotters.net")} / planespotters.net</div>
+          <div class="pop-photo-credit">${this._escapeHtml(this._photoCredit(result))}</div>
         </div>`;
     }
 
@@ -640,18 +644,30 @@ class PlaneSightMapCard extends HTMLElement {
   async _fetchBestPhoto(identity, controller) {
     const urls = [];
     if (identity.reg) {
-      urls.push(`https://api.planespotters.net/pub/photos/reg/${encodeURIComponent(identity.reg)}`);
+      urls.push({
+        url: `https://api.planespotters.net/pub/photos/reg/${encodeURIComponent(identity.reg)}`,
+      });
     }
     if (identity.hex) {
       const params = new URLSearchParams();
       if (identity.reg) params.set("reg", identity.reg);
       if (identity.type) params.set("icaoType", identity.type);
       const query = params.toString();
-      urls.push(`https://api.planespotters.net/pub/photos/hex/${encodeURIComponent(identity.hex)}${query ? `?${query}` : ""}`);
+      urls.push({
+        url: `https://api.planespotters.net/pub/photos/hex/${encodeURIComponent(identity.hex)}${query ? `?${query}` : ""}`,
+      });
+    }
+    const genericReg = GENERIC_TYPE_PHOTO_REGISTRATIONS[identity.type];
+    if (genericReg && genericReg !== identity.reg) {
+      urls.push({
+        url: `https://api.planespotters.net/pub/photos/reg/${encodeURIComponent(genericReg)}`,
+        genericType: identity.type,
+      });
     }
 
-    for (const url of urls) {
-      const result = await this._fetchPhotoUrl(url, controller);
+    for (const request of urls) {
+      const result = await this._fetchPhotoUrl(request.url, controller);
+      if (result && request.genericType) result.genericType = request.genericType;
       if (result) return result;
     }
     return null;
@@ -672,6 +688,13 @@ class PlaneSightMapCard extends HTMLElement {
             }
           : null;
       });
+  }
+
+  _photoCredit(result) {
+    const credit = result?.credit || "planespotters.net";
+    return result?.genericType
+      ? `Generic ${result.genericType} photo: ${credit} / planespotters.net`
+      : `${credit} / planespotters.net`;
   }
 
   _applyPhoto(photoDiv, result, popup, expectedPhotoKey = null) {
@@ -715,7 +738,7 @@ class PlaneSightMapCard extends HTMLElement {
 
       const credit = document.createElement("div");
       credit.className = "pop-photo-credit";
-      credit.textContent = `${result.credit} / planespotters.net`;
+      credit.textContent = this._photoCredit(result);
 
       frame.appendChild(link);
       frame.appendChild(credit);
