@@ -71,7 +71,7 @@ const FEET_TO_METRES = 0.3048;
 const KNOTS_TO_KMH   = 1.852;
 const NM_TO_KM       = 1.852;
 const DISTANCE_FIELDS = ["distance_nm", "distance", "dist", "dst", "r_dst"];
-const PHOTO_CACHE_VERSION = "v3";
+const PHOTO_CACHE_VERSION = "v4";
 const DEFAULT_GENERIC_TYPE_PHOTOS = {
   BE58: {
     reg: "N758CA",
@@ -86,6 +86,8 @@ const DEFAULT_GENERIC_TYPE_PHOTOS = {
     credit: "NS_Aviation",
   },
 };
+
+const HELICOPTER_TYPE_RE = /^(R22|R44|R66|S76|S92|S61|H60|NH90|H64|H47|H46|AS3[2B5]|PUMA|TIGR|MI24|A109|A119|A139|A149|A169|A189|B06|B206|B407|B412|B429|EC20|EC25|EC30|EC35|EC45|EC55|EC75|EH10|H120|H125|H130|H135|H145|H160|H53|H53S|GAZL|AS50|AS55|ALO[23]|AS65|BK11[57]|BO10[45]|GYRO)/;
 
 function haversineNm(lat1, lon1, lat2, lon2) {
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -114,6 +116,10 @@ function existingDistanceNm(ac) {
 
 function aircraftKey(ac, idx = 0) {
   return ac.hex || `${ac.lat}:${ac.lon}:${ac.flight || ac.r || idx}`;
+}
+
+function aircraftTypeLooksHelicopter(type) {
+  return HELICOPTER_TYPE_RE.test(String(type || "").trim().toUpperCase());
 }
 
 /**
@@ -186,7 +192,7 @@ function aircraftIconKind(ac) {
   // ── Priority 2: Exact type-code lookup ───────────────────────────────────
   if (type) {
     // Helicopters
-    if (/^(R22|R44|R66|S76|S92|S61|H60|NH90|H64|H47|H46|AS3[2B]|PUMA|TIGR|MI24|A139|A169|A149|A189|EC25|EC55|EC75|EH10|H160|H53|H53S|GAZL|AS50|AS55|ALO[23]|AS65|BK11[57]|BO10[45]|GYRO)/.test(type))
+    if (aircraftTypeLooksHelicopter(type))
       return "helicopter";
 
     // Twin-prop
@@ -755,7 +761,25 @@ class PlaneSightMapCard extends HTMLElement {
 
   async _fetchBestPhoto(identity, controller) {
     const urls = [];
-    if (identity.reg) {
+    const genericPhoto = this._genericTypePhoto(identity.type);
+    const isHelicopter = aircraftTypeLooksHelicopter(identity.type);
+
+    if (isHelicopter && genericPhoto?.src) {
+      return {
+        src: genericPhoto.src,
+        link: genericPhoto.link,
+        credit: genericPhoto.credit,
+        genericType: identity.type,
+      };
+    }
+
+    if (isHelicopter && genericPhoto?.reg) {
+      urls.push({
+        url: `https://api.planespotters.net/pub/photos/reg/${encodeURIComponent(genericPhoto.reg)}`,
+        genericType: identity.type,
+      });
+    }
+    if (identity.reg && !(isHelicopter && genericPhoto?.reg)) {
       urls.push({
         url: `https://api.planespotters.net/pub/photos/reg/${encodeURIComponent(identity.reg)}`,
       });
@@ -769,8 +793,7 @@ class PlaneSightMapCard extends HTMLElement {
         url: `https://api.planespotters.net/pub/photos/hex/${encodeURIComponent(identity.hex)}${query ? `?${query}` : ""}`,
       });
     }
-    const genericPhoto = this._genericTypePhoto(identity.type);
-    if (genericPhoto?.reg && genericPhoto.reg !== identity.reg) {
+    if (!isHelicopter && genericPhoto?.reg && genericPhoto.reg !== identity.reg) {
       urls.push({
         url: `https://api.planespotters.net/pub/photos/reg/${encodeURIComponent(genericPhoto.reg)}`,
         genericType: identity.type,

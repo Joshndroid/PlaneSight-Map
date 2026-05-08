@@ -25,7 +25,9 @@ generic_type_photos:
 
 If a type maps to a registration only, the card will ask PlaneSpotters for
 that registration. If `src` is also supplied, that image can be shown
-immediately while exact-photo lookup continues in the background.
+immediately while exact-photo lookup continues in the background. Helicopter
+type photos with a configured `src` are treated as authoritative because reused
+registrations and hex codes can otherwise return stale fixed-wing photos.
 
 The map starts centered on Home Assistant's configured home location, then
 recenters on the ADS-B receiver location if the PlaneSight sensor or receiver
